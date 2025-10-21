@@ -15,7 +15,7 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 
-	"x402pay/pkg/constants"
+	"github.com/sigweihq/x402pay/pkg/constants"
 )
 
 // ChainListResponse represents a chain entry from chainlist.org/rpcs.json

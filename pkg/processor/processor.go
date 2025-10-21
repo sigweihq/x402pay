@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"x402pay/pkg/constants"
+	"github.com/sigweihq/x402pay/pkg/constants"
 
 	"github.com/coinbase/x402/go/pkg/coinbasefacilitator"
 	"github.com/coinbase/x402/go/pkg/facilitatorclient"

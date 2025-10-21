@@ -5,8 +5,8 @@ import (
 	"os"
 	"sync"
 	"testing"
-	"x402pay/pkg/constants"
 
+	"github.com/sigweihq/x402pay/pkg/constants"
 	"github.com/stretchr/testify/assert"
 )
 

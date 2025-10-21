@@ -1,4 +1,4 @@
-module x402pay
+module github.com/sigweihq/x402pay
 
 go 1.24.5
 
