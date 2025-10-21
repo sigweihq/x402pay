@@ -33,19 +33,33 @@ type ChainListRPCEntry struct {
 
 // RPCManager handles blockchain RPC endpoints and failover
 type RPCManager struct {
-	endpoints map[int64][]string // chainID -> []rpc_urls
-	logger    *slog.Logger
-	mu        sync.RWMutex
+	endpoints        map[int64][]string // chainID -> []rpc_urls
+	logger           *slog.Logger
+	mu               sync.RWMutex
+	networksToMonitor map[string]bool // only health check these networks
 }
 
 // Global RPC manager instance
 var globalRPCManager *RPCManager
 
 // InitGlobalRPCManager initializes the global RPC manager at server startup
-func InitGlobalRPCManager(logger *slog.Logger) {
+// Only the specified networks will be monitored and health checked
+func InitGlobalRPCManager(logger *slog.Logger, networksToMonitor ...string) {
+	networkMap := make(map[string]bool)
+	for _, network := range networksToMonitor {
+		networkMap[network] = true
+	}
+
+	// Default to base and base-sepolia if none specified
+	if len(networkMap) == 0 {
+		networkMap[constants.NetworkBase] = true
+		networkMap[constants.NetworkBaseSepolia] = true
+	}
+
 	globalRPCManager = &RPCManager{
-		endpoints: make(map[int64][]string),
-		logger:    logger,
+		endpoints:         make(map[int64][]string),
+		logger:            logger,
+		networksToMonitor: networkMap,
 	}
 	// Start background service immediately
 	globalRPCManager.startBackgroundRefresh()
@@ -106,6 +120,11 @@ func (r *RPCManager) loadEndpoints() {
 // setOfficialEndpoints sets the official reliable endpoints first
 func (r *RPCManager) setOfficialEndpoints() {
 	for network, endpoints := range constants.OfficialRPCEndpoints {
+		// Only set official endpoints for networks we're monitoring
+		if !r.networksToMonitor[network] {
+			continue
+		}
+
 		chainID := constants.NetworkToChainID[network]
 		r.endpoints[chainID] = endpoints
 	}
@@ -113,9 +132,23 @@ func (r *RPCManager) setOfficialEndpoints() {
 
 // addChainlistEndpoints adds additional endpoints from chainlist.org
 func (r *RPCManager) addChainlistEndpoints(chains []ChainListResponse) {
+	// Map chain IDs from monitored networks
+	monitoredChainIDs := make(map[int64]bool)
+	for network := range r.networksToMonitor {
+		if chainID, ok := constants.NetworkToChainID[network]; ok {
+			monitoredChainIDs[chainID] = true
+		}
+	}
+
 	for _, chain := range chains {
-		additionalRPCs := r.extractHTTPSRPCs(chain.RPC)
 		chainID := int64(chain.ChainID)
+
+		// Only add endpoints for networks we're monitoring
+		if !monitoredChainIDs[chainID] {
+			continue
+		}
+
+		additionalRPCs := r.extractHTTPSRPCs(chain.RPC)
 		r.endpoints[chainID] = append(r.endpoints[chainID], additionalRPCs...)
 	}
 }
