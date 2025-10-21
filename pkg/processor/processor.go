@@ -59,6 +59,14 @@ func getProcessor(network string) *PaymentProcessor {
 	return processor.(*PaymentProcessor)
 }
 
+func GetFirstFacilitatorConfig(network string) *x402types.FacilitatorConfig {
+	processor := getProcessor(network)
+	if processor == nil {
+		return nil
+	}
+	return processor.facilitatorConfigs[0]
+}
+
 // buildFacilitatorConfigs creates facilitator configurations from URLs or CDP credentials
 func buildFacilitatorConfigs(urls []string, cdpAPIKeyID, cdpAPIKeySecret string) []*x402types.FacilitatorConfig {
 	if cdpAPIKeyID != "" && cdpAPIKeySecret != "" {
