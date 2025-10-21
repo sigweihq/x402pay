@@ -14,28 +14,29 @@ import (
 	x402types "github.com/coinbase/x402/go/pkg/types"
 )
 
-// FacilitatorConfig holds the configuration needed to create facilitator configs
-type FacilitatorConfig struct {
-	FacilitatorURLs        []string
-	FacilitatorTestnetURLs []string
-	CDPAPIKeyID            string
-	CDPAPIKeySecret        string
+// FacilitatorsConfig holds the configuration needed to create facilitator configs
+type FacilitatorsConfig struct {
+	networkToFacilitatorURLs map[string][]string
+	CDPAPIKeyID              string
+	CDPAPIKeySecret          string
+}
+
+type ConfigEntry struct {
+	once    sync.Once
+	configs []*x402types.FacilitatorConfig
 }
 
 // PaymentProcessor handles x402 payment verification and settlement with failover support
 type PaymentProcessor struct {
-	config             *FacilitatorConfig
-	testnetConfigsOnce sync.Once
-	mainnetConfigsOnce sync.Once
-	testnetConfigs     []*x402types.FacilitatorConfig
-	mainnetConfigs     []*x402types.FacilitatorConfig
+	config               *FacilitatorsConfig
+	networkToConfigEntry sync.Map
 
 	// Blockchain verification
 	logger *slog.Logger
 }
 
 // NewPaymentProcessor creates a new payment processor with the given configuration
-func NewPaymentProcessor(config *FacilitatorConfig, logger *slog.Logger) *PaymentProcessor {
+func NewPaymentProcessor(config *FacilitatorsConfig, logger *slog.Logger) *PaymentProcessor {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -60,19 +61,22 @@ func (p *PaymentProcessor) buildFacilitatorConfigs(urls []string) []*x402types.F
 	return configs
 }
 
-// GetFacilitatorConfigs returns all facilitator configurations for failover support
-func (p *PaymentProcessor) GetFacilitatorConfigs(isTest bool) []*x402types.FacilitatorConfig {
-	if isTest {
-		p.testnetConfigsOnce.Do(func() {
-			p.testnetConfigs = p.buildFacilitatorConfigs(p.config.FacilitatorTestnetURLs)
+// getFacilitatorConfigs returns all facilitator configurations for failover support
+func (p *PaymentProcessor) getFacilitatorConfigs(network string) []*x402types.FacilitatorConfig {
+	entry, loaded := p.networkToConfigEntry.Load(network)
+	if !loaded {
+		entry = &ConfigEntry{
+			once:    sync.Once{},
+			configs: nil,
+		}
+		entry.(*ConfigEntry).once.Do(func() {
+			entry.(*ConfigEntry).configs = p.buildFacilitatorConfigs(p.config.networkToFacilitatorURLs[network])
 		})
-		return p.testnetConfigs
+		p.networkToConfigEntry.Store(network, entry)
 	}
 
-	p.mainnetConfigsOnce.Do(func() {
-		p.mainnetConfigs = p.buildFacilitatorConfigs(p.config.FacilitatorURLs)
-	})
-	return p.mainnetConfigs
+	entry, _ = p.networkToConfigEntry.Load(network)
+	return entry.(*ConfigEntry).configs
 }
 
 // shouldRetryWithNextFacilitator determines if we should try the next facilitator
@@ -176,21 +180,19 @@ func (p *PaymentProcessor) tryFacilitatorWithCallback(
 func (p *PaymentProcessor) ProcessPayment(
 	paymentPayload *x402types.PaymentPayload,
 	paymentRequirements *x402types.PaymentRequirements,
-	isTest bool,
 	skipVerification bool,
 ) (*x402types.SettleResponse, error) {
-	return p.ProcessPaymentWithCallback(paymentPayload, paymentRequirements, isTest, skipVerification, nil)
+	return p.ProcessPaymentWithCallback(paymentPayload, paymentRequirements, skipVerification, nil)
 }
 
 // ProcessPaymentWithCallback verifies and settles a payment with an optional verification callback
 func (p *PaymentProcessor) ProcessPaymentWithCallback(
 	paymentPayload *x402types.PaymentPayload,
 	paymentRequirements *x402types.PaymentRequirements,
-	isTest bool,
 	skipVerification bool,
 	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
 ) (*x402types.SettleResponse, error) {
-	facilitatorConfigs := p.GetFacilitatorConfigs(isTest)
+	facilitatorConfigs := p.getFacilitatorConfigs(paymentPayload.Network)
 
 	if len(facilitatorConfigs) == 0 {
 		return nil, fmt.Errorf("no facilitator configurations available")

@@ -38,8 +38,10 @@ func main() {
 
     // Configure facilitators
     config := &processor.FacilitatorConfig{
-        FacilitatorURLs:        []string{"https://facilitator1.com"},
-        FacilitatorTestnetURLs: []string{"https://testnet-facilitator.com"},
+        networkToFacilitatorURLs: map[string][]string{
+            constants.NetworkBase:        []string{"https://facilitator1.com"},
+            constants.NetworkBaseSepolia: []string{"https://testnet-facilitator.com"},
+        },
         // Optional: Use Coinbase CDP
         CDPAPIKeyID:     os.Getenv("CDP_API_KEY_ID"),
         CDPAPIKeySecret: os.Getenv("CDP_API_KEY_SECRET"),
@@ -50,9 +52,8 @@ func main() {
 
     // Process a payment
     settleResp, err := paymentProcessor.ProcessPayment(
-        paymentPayload,      // *x402types.PaymentPayload
+        paymentPayload,      // *x402types.PaymentPayload (contains Network field)
         paymentRequirements, // *x402types.PaymentRequirements
-        true,                // isTest (testnet)
         false,               // skipVerification
     )
     if err != nil {
@@ -90,12 +91,16 @@ func main() {
 
 ### Facilitator Failover
 
-The library automatically tries multiple facilitators in sequence:
+The library automatically tries multiple facilitators in sequence based on the network specified in the payment payload:
 
-1. First facilitator attempt
-2. If it fails with retryable error (timeout, 5xx, auth), try next
-3. If it fails with client error (4xx, invalid signature), return error immediately
-4. Continue until success or all facilitators exhausted
+1. Determines the network from `PaymentPayload.Network` field
+2. Retrieves the corresponding facilitator URLs for that network
+3. Attempts each facilitator in sequence:
+   - If it fails with retryable error (timeout, 5xx, auth), tries next
+   - If it fails with client error (4xx, invalid signature), returns error immediately
+4. Continues until success or all facilitators exhausted
+
+Facilitator configurations are lazily initialized and cached per network for efficiency.
 
 ### Optional Blockchain Verification
 
@@ -121,7 +126,6 @@ func NewPaymentProcessor(config *FacilitatorConfig, logger *slog.Logger) *Paymen
 func (p *PaymentProcessor) ProcessPayment(
     paymentPayload *x402types.PaymentPayload,
     paymentRequirements *x402types.PaymentRequirements,
-    isTest bool,
     skipVerification bool,
 ) (*x402types.SettleResponse, error)
 
@@ -129,7 +133,6 @@ func (p *PaymentProcessor) ProcessPayment(
 func (p *PaymentProcessor) ProcessPaymentWithCallback(
     paymentPayload *x402types.PaymentPayload,
     paymentRequirements *x402types.PaymentRequirements,
-    isTest bool,
     skipVerification bool,
     onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
 ) (*x402types.SettleResponse, error)
@@ -152,12 +155,13 @@ func (r *RPCManager) GetTransactionReceipt(network, txHash string) (*ethtypes.Re
 
 ```go
 type FacilitatorConfig struct {
-    FacilitatorURLs        []string // Mainnet facilitator URLs
-    FacilitatorTestnetURLs []string // Testnet facilitator URLs
-    CDPAPIKeyID            string   // Optional: Coinbase CDP API key ID
-    CDPAPIKeySecret        string   // Optional: Coinbase CDP API secret
+    networkToFacilitatorURLs map[string][]string // Map of network names to facilitator URLs
+    CDPAPIKeyID              string               // Optional: Coinbase CDP API key ID
+    CDPAPIKeySecret          string               // Optional: Coinbase CDP API secret
 }
 ```
+
+**Note**: The network-to-facilitator URL mapping allows you to configure different facilitators for different networks (e.g., `constants.NetworkBase`, `constants.NetworkBaseSepolia`).
 
 ## Development
 

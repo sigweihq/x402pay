@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"x402pay/pkg/constants"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -110,11 +111,13 @@ func TestShouldRetryWithNextFacilitator(t *testing.T) {
 }
 
 func TestNewPaymentProcessor(t *testing.T) {
-	config := &FacilitatorConfig{
-		FacilitatorURLs:        []string{"https://facilitator1.com", "https://facilitator2.com"},
-		FacilitatorTestnetURLs: []string{"https://testnet1.com", "https://testnet2.com"},
-		CDPAPIKeyID:            "test-key-id",
-		CDPAPIKeySecret:        "test-secret",
+	config := &FacilitatorsConfig{
+		networkToFacilitatorURLs: map[string][]string{
+			constants.NetworkBase:        []string{"https://facilitator1.com", "https://facilitator2.com"},
+			constants.NetworkBaseSepolia: []string{"https://testnet1.com", "https://testnet2.com"},
+		},
+		CDPAPIKeyID:     "test-key-id",
+		CDPAPIKeySecret: "test-secret",
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -128,36 +131,40 @@ func TestGetFacilitatorConfigs(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// Test with CDP credentials - should use CDP for both testnet and mainnet
-	configWithCDP := &FacilitatorConfig{
-		FacilitatorURLs:        []string{"https://facilitator1.com", "https://facilitator2.com"},
-		FacilitatorTestnetURLs: []string{"https://testnet1.com", "https://testnet2.com"},
-		CDPAPIKeyID:            "test-key-id",
-		CDPAPIKeySecret:        "test-secret",
+	configWithCDP := &FacilitatorsConfig{
+		networkToFacilitatorURLs: map[string][]string{
+			constants.NetworkBase:        []string{"https://facilitator1.com", "https://facilitator2.com"},
+			constants.NetworkBaseSepolia: []string{"https://testnet1.com", "https://testnet2.com"},
+		},
+		CDPAPIKeyID:     "test-key-id",
+		CDPAPIKeySecret: "test-secret",
 	}
 	processorWithCDP := NewPaymentProcessor(configWithCDP, logger)
 
 	// When CDP credentials are present, should use CDP facilitator
-	testnetConfigs := processorWithCDP.GetFacilitatorConfigs(true)
+	testnetConfigs := processorWithCDP.getFacilitatorConfigs(constants.NetworkBaseSepolia)
 	assert.Len(t, testnetConfigs, 1)
 	assert.Equal(t, "https://api.cdp.coinbase.com/platform/v2/x402", testnetConfigs[0].URL)
 
-	mainnetConfigs := processorWithCDP.GetFacilitatorConfigs(false)
+	mainnetConfigs := processorWithCDP.getFacilitatorConfigs(constants.NetworkBase)
 	assert.Len(t, mainnetConfigs, 1)
 	assert.Equal(t, "https://api.cdp.coinbase.com/platform/v2/x402", mainnetConfigs[0].URL)
 
 	// Test without CDP credentials - should use configured URLs
-	configWithoutCDP := &FacilitatorConfig{
-		FacilitatorURLs:        []string{"https://facilitator1.com", "https://facilitator2.com"},
-		FacilitatorTestnetURLs: []string{"https://testnet1.com", "https://testnet2.com"},
+	configWithoutCDP := &FacilitatorsConfig{
+		networkToFacilitatorURLs: map[string][]string{
+			constants.NetworkBase:        []string{"https://facilitator1.com", "https://facilitator2.com"},
+			constants.NetworkBaseSepolia: []string{"https://testnet1.com", "https://testnet2.com"},
+		},
 	}
 	processorWithoutCDP := NewPaymentProcessor(configWithoutCDP, logger)
 
-	testnetConfigsNoCDP := processorWithoutCDP.GetFacilitatorConfigs(true)
+	testnetConfigsNoCDP := processorWithoutCDP.getFacilitatorConfigs(constants.NetworkBaseSepolia)
 	assert.Len(t, testnetConfigsNoCDP, 2)
 	assert.Equal(t, "https://testnet1.com", testnetConfigsNoCDP[0].URL)
 	assert.Equal(t, "https://testnet2.com", testnetConfigsNoCDP[1].URL)
 
-	mainnetConfigsNoCDP := processorWithoutCDP.GetFacilitatorConfigs(false)
+	mainnetConfigsNoCDP := processorWithoutCDP.getFacilitatorConfigs(constants.NetworkBase)
 	assert.Len(t, mainnetConfigsNoCDP, 2)
 	assert.Equal(t, "https://facilitator1.com", mainnetConfigsNoCDP[0].URL)
 	assert.Equal(t, "https://facilitator2.com", mainnetConfigsNoCDP[1].URL)

@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"x402pay/pkg/constants"
+
 	x402types "github.com/coinbase/x402/go/pkg/types"
 	"github.com/stretchr/testify/assert"
 )
@@ -83,8 +85,10 @@ func TestGlobalRPCManagerCreation(t *testing.T) {
 }
 
 func TestProcessorWithBlockchainVerification(t *testing.T) {
-	config := &FacilitatorConfig{
-		FacilitatorTestnetURLs: []string{"https://testnet.example.com"},
+	config := &FacilitatorsConfig{
+		networkToFacilitatorURLs: map[string][]string{
+			constants.NetworkBaseSepolia: []string{"https://testnet.example.com"},
+		},
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 

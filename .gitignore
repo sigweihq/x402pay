@@ -11,9 +11,9 @@
 # Test binary, built with `go test -c`
 *.test
 
-# Code coverage profiles and other test artifacts
+# Output of the go coverage tool, specifically when used with LiteIDE
 *.out
-coverage.*
+coverage.html
 *.coverprofile
 profile.cov
 
@@ -27,6 +27,46 @@ go.work.sum
 # env file
 .env
 
-# Editor/IDE
-# .idea/
-# .vscode/
+sigwei
+
+# Build artifacts directory
+build/
+
+.venv
+.secrets
+.env*.local
+.vercel
+.infisical.json
+.vscode/
+
+# Logs
+logs
+*.log
+dev-debug.log
+# Dependency directories
+# Environment variables
+# Editor directories and files
+.idea
+.vscode
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+# OS specific
+.DS_Store
+
+# Task files
+# tasks.json
+# tasks/
+
+# Test results
+test-results/
+results.sarif
+
+report.md
+.cursor/mcp.json
+/tmp/main
+/monitor
+/server
+.claude/
