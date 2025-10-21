@@ -50,15 +50,8 @@ func main() {
     // Initialize processor map once at startup
     processor.InitProcessorMap(config, logger)
 
-    // Get processor for the payment's network
-    paymentProcessor := processor.GetProcessor(paymentPayload.Network)
-    if paymentProcessor == nil {
-        logger.Error("Failed to get processor", "error", err)
-        return
-    }
-
-    // Process a payment
-    settleResp, err := paymentProcessor.ProcessPayment(
+    // Process a payment - processor is automatically selected based on network
+    settleResp, err := ProcessPayment(
         paymentPayload,      // *x402types.PaymentPayload (contains Network field)
         paymentRequirements, // *x402types.PaymentRequirements
         false,               // skipVerification
@@ -98,21 +91,23 @@ func main() {
 
 ### Processor Map Architecture
 
-The library uses a map of network → `PaymentProcessor`:
+The library uses an internal map of network → `PaymentProcessor`:
 
 1. At startup, `InitProcessorMap()` creates one processor per network
 2. Each processor has its own pre-built list of facilitator configurations
-3. Call `GetProcessor(network)` to retrieve the processor for a specific network
+3. When processing a payment, the correct processor is automatically selected based on `paymentPayload.Network`
 4. All facilitator configs are created once during initialization, eliminating overhead on payment processing
 
 ### Facilitator Failover
 
-Each `PaymentProcessor` automatically tries multiple facilitators in sequence:
+The payment processor automatically tries multiple facilitators in sequence:
 
-1. Attempts each facilitator in the pre-built configuration list
-2. If it fails with retryable error (timeout, 5xx, auth), tries next
-3. If it fails with client error (4xx, invalid signature), returns error immediately
-4. Continues until success or all facilitators exhausted
+1. Determines the network from `paymentPayload.Network`
+2. Retrieves the pre-configured processor for that network
+3. Attempts each facilitator in the processor's configuration list
+4. If it fails with retryable error (timeout, 5xx, auth), tries next
+5. If it fails with client error (4xx, invalid signature), returns error immediately
+6. Continues until success or all facilitators exhausted
 
 ### Optional Blockchain Verification
 
@@ -133,23 +128,22 @@ After facilitator settlement, the library:
 ```go
 // Initialize processor map once at startup
 func InitProcessorMap(config *ProcessorConfig, logger *slog.Logger)
-
-// Get processor for a specific network
-func GetProcessor(network string) (*PaymentProcessor, error)
 ```
 
-### PaymentProcessor
+### Payment Processing
 
 ```go
 // Process payment without callback
-func (p *PaymentProcessor) ProcessPayment(
+// Automatically selects the correct processor based on paymentPayload.Network
+func ProcessPayment(
     paymentPayload *x402types.PaymentPayload,
     paymentRequirements *x402types.PaymentRequirements,
     skipVerification bool,
 ) (*x402types.SettleResponse, error)
 
 // Process payment with verification callback
-func (p *PaymentProcessor) ProcessPaymentWithCallback(
+// Automatically selects the correct processor based on paymentPayload.Network
+func ProcessPaymentWithCallback(
     paymentPayload *x402types.PaymentPayload,
     paymentRequirements *x402types.PaymentRequirements,
     skipVerification bool,
@@ -184,7 +178,7 @@ type ProcessorConfig struct {
 - Initialize the processor map once at application startup using `InitProcessorMap()`
 - Each network gets its own `PaymentProcessor` with pre-built facilitator configurations
 - Facilitator configs are created once during initialization, not on every payment
-- Use `GetProcessor(network)` to retrieve the processor for a specific network
+- The correct processor is automatically selected based on the `Network` field in the payment payload
 
 ## Development
 
