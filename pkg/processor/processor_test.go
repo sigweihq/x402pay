@@ -3,6 +3,7 @@ package processor
 import (
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"x402pay/pkg/constants"
 
@@ -110,64 +111,87 @@ func TestShouldRetryWithNextFacilitator(t *testing.T) {
 	}
 }
 
-func TestNewPaymentProcessor(t *testing.T) {
-	config := &FacilitatorsConfig{
-		networkToFacilitatorURLs: map[string][]string{
-			constants.NetworkBase:        []string{"https://facilitator1.com", "https://facilitator2.com"},
-			constants.NetworkBaseSepolia: []string{"https://testnet1.com", "https://testnet2.com"},
+func TestInitProcessorMap(t *testing.T) {
+	config := &ProcessorConfig{
+		NetworkToFacilitatorURLs: map[string][]string{
+			constants.NetworkBase:        {"https://facilitator1.com", "https://facilitator2.com"},
+			constants.NetworkBaseSepolia: {"https://testnet1.com", "https://testnet2.com"},
 		},
 		CDPAPIKeyID:     "test-key-id",
 		CDPAPIKeySecret: "test-secret",
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	processor := NewPaymentProcessor(config, logger)
 
-	assert.NotNil(t, processor)
-	assert.Equal(t, config, processor.config)
+	// Reset state for testing
+	processorMap = sync.Map{}
+	processorMapOnce = sync.Once{}
+
+	InitProcessorMap(config, logger)
+
+	// Verify processors were created for each network
+	baseProcessor := getProcessor(constants.NetworkBase)
+	assert.NotNil(t, baseProcessor)
+
+	sepoliaProcessor := getProcessor(constants.NetworkBaseSepolia)
+	assert.NotNil(t, sepoliaProcessor)
+
+	// Verify error for unknown network
+	unknownProcessor := getProcessor("unknown-network")
+	assert.Nil(t, unknownProcessor)
 }
 
-func TestGetFacilitatorConfigs(t *testing.T) {
+func TestProcessorFacilitatorConfigs(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	// Test with CDP credentials - should use CDP for both testnet and mainnet
-	configWithCDP := &FacilitatorsConfig{
-		networkToFacilitatorURLs: map[string][]string{
-			constants.NetworkBase:        []string{"https://facilitator1.com", "https://facilitator2.com"},
-			constants.NetworkBaseSepolia: []string{"https://testnet1.com", "https://testnet2.com"},
+	// Test with CDP credentials - should use CDP for all networks
+	configWithCDP := &ProcessorConfig{
+		NetworkToFacilitatorURLs: map[string][]string{
+			constants.NetworkBase:        {"https://facilitator1.com", "https://facilitator2.com"},
+			constants.NetworkBaseSepolia: {"https://testnet1.com", "https://testnet2.com"},
 		},
 		CDPAPIKeyID:     "test-key-id",
 		CDPAPIKeySecret: "test-secret",
 	}
-	processorWithCDP := NewPaymentProcessor(configWithCDP, logger)
+
+	// Reset state for testing
+	processorMap = sync.Map{}
+	processorMapOnce = sync.Once{}
+
+	InitProcessorMap(configWithCDP, logger)
 
 	// When CDP credentials are present, should use CDP facilitator
-	testnetConfigs := processorWithCDP.getFacilitatorConfigs(constants.NetworkBaseSepolia)
-	assert.Len(t, testnetConfigs, 1)
-	assert.Equal(t, "https://api.cdp.coinbase.com/platform/v2/x402", testnetConfigs[0].URL)
+	testnetProcessor := getProcessor(constants.NetworkBaseSepolia)
+	assert.Len(t, testnetProcessor.facilitatorConfigs, 1)
+	assert.Equal(t, "https://api.cdp.coinbase.com/platform/v2/x402", testnetProcessor.facilitatorConfigs[0].URL)
 
-	mainnetConfigs := processorWithCDP.getFacilitatorConfigs(constants.NetworkBase)
-	assert.Len(t, mainnetConfigs, 1)
-	assert.Equal(t, "https://api.cdp.coinbase.com/platform/v2/x402", mainnetConfigs[0].URL)
+	mainnetProcessor := getProcessor(constants.NetworkBase)
+	assert.Len(t, mainnetProcessor.facilitatorConfigs, 1)
+	assert.Equal(t, "https://api.cdp.coinbase.com/platform/v2/x402", mainnetProcessor.facilitatorConfigs[0].URL)
 
 	// Test without CDP credentials - should use configured URLs
-	configWithoutCDP := &FacilitatorsConfig{
-		networkToFacilitatorURLs: map[string][]string{
-			constants.NetworkBase:        []string{"https://facilitator1.com", "https://facilitator2.com"},
-			constants.NetworkBaseSepolia: []string{"https://testnet1.com", "https://testnet2.com"},
+	configWithoutCDP := &ProcessorConfig{
+		NetworkToFacilitatorURLs: map[string][]string{
+			constants.NetworkBase:        {"https://facilitator1.com", "https://facilitator2.com"},
+			constants.NetworkBaseSepolia: {"https://testnet1.com", "https://testnet2.com"},
 		},
 	}
-	processorWithoutCDP := NewPaymentProcessor(configWithoutCDP, logger)
 
-	testnetConfigsNoCDP := processorWithoutCDP.getFacilitatorConfigs(constants.NetworkBaseSepolia)
-	assert.Len(t, testnetConfigsNoCDP, 2)
-	assert.Equal(t, "https://testnet1.com", testnetConfigsNoCDP[0].URL)
-	assert.Equal(t, "https://testnet2.com", testnetConfigsNoCDP[1].URL)
+	// Reset state for testing
+	processorMap = sync.Map{}
+	processorMapOnce = sync.Once{}
 
-	mainnetConfigsNoCDP := processorWithoutCDP.getFacilitatorConfigs(constants.NetworkBase)
-	assert.Len(t, mainnetConfigsNoCDP, 2)
-	assert.Equal(t, "https://facilitator1.com", mainnetConfigsNoCDP[0].URL)
-	assert.Equal(t, "https://facilitator2.com", mainnetConfigsNoCDP[1].URL)
+	InitProcessorMap(configWithoutCDP, logger)
+
+	testnetProcessorNoCDP := getProcessor(constants.NetworkBaseSepolia)
+	assert.Len(t, testnetProcessorNoCDP.facilitatorConfigs, 2)
+	assert.Equal(t, "https://testnet1.com", testnetProcessorNoCDP.facilitatorConfigs[0].URL)
+	assert.Equal(t, "https://testnet2.com", testnetProcessorNoCDP.facilitatorConfigs[1].URL)
+
+	mainnetProcessorNoCDP := getProcessor(constants.NetworkBase)
+	assert.Len(t, mainnetProcessorNoCDP.facilitatorConfigs, 2)
+	assert.Equal(t, "https://facilitator1.com", mainnetProcessorNoCDP.facilitatorConfigs[0].URL)
+	assert.Equal(t, "https://facilitator2.com", mainnetProcessorNoCDP.facilitatorConfigs[1].URL)
 }
 
 // MockError is a simple error type for testing

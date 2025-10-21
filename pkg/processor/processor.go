@@ -14,43 +14,56 @@ import (
 	x402types "github.com/coinbase/x402/go/pkg/types"
 )
 
-// FacilitatorsConfig holds the configuration needed to create facilitator configs
-type FacilitatorsConfig struct {
-	networkToFacilitatorURLs map[string][]string
-	CDPAPIKeyID              string
-	CDPAPIKeySecret          string
-}
+var (
+	processorMap     sync.Map
+	processorMapOnce sync.Once
+)
 
-type ConfigEntry struct {
-	once    sync.Once
-	configs []*x402types.FacilitatorConfig
+// ProcessorConfig holds the configuration for payment processors
+type ProcessorConfig struct {
+	NetworkToFacilitatorURLs map[string][]string // Map of network name to facilitator URLs
+	CDPAPIKeyID              string              // Optional: Coinbase CDP API key ID
+	CDPAPIKeySecret          string              // Optional: Coinbase CDP API secret
 }
 
 // PaymentProcessor handles x402 payment verification and settlement with failover support
 type PaymentProcessor struct {
-	config               *FacilitatorsConfig
-	networkToConfigEntry sync.Map
-
-	// Blockchain verification
-	logger *slog.Logger
+	facilitatorConfigs []*x402types.FacilitatorConfig
+	logger             *slog.Logger
 }
 
-// NewPaymentProcessor creates a new payment processor with the given configuration
-func NewPaymentProcessor(config *FacilitatorsConfig, logger *slog.Logger) *PaymentProcessor {
+// InitProcessorMap initializes the processor map with the given configuration
+// This should be called once at application startup
+func InitProcessorMap(config *ProcessorConfig, logger *slog.Logger) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &PaymentProcessor{
-		config: config,
-		logger: logger,
+
+	processorMapOnce.Do(func() {
+		for network, urls := range config.NetworkToFacilitatorURLs {
+			facilitatorConfigs := buildFacilitatorConfigs(urls, config.CDPAPIKeyID, config.CDPAPIKeySecret)
+			processor := &PaymentProcessor{
+				facilitatorConfigs: facilitatorConfigs,
+				logger:             logger,
+			}
+			processorMap.Store(network, processor)
+		}
+	})
+}
+
+func getProcessor(network string) *PaymentProcessor {
+	processor, ok := processorMap.Load(network)
+	if !ok {
+		return nil
 	}
+	return processor.(*PaymentProcessor)
 }
 
 // buildFacilitatorConfigs creates facilitator configurations from URLs or CDP credentials
-func (p *PaymentProcessor) buildFacilitatorConfigs(urls []string) []*x402types.FacilitatorConfig {
-	if p.config.CDPAPIKeyID != "" && p.config.CDPAPIKeySecret != "" {
+func buildFacilitatorConfigs(urls []string, cdpAPIKeyID, cdpAPIKeySecret string) []*x402types.FacilitatorConfig {
+	if cdpAPIKeyID != "" && cdpAPIKeySecret != "" {
 		return []*x402types.FacilitatorConfig{
-			coinbasefacilitator.CreateFacilitatorConfig(p.config.CDPAPIKeyID, p.config.CDPAPIKeySecret),
+			coinbasefacilitator.CreateFacilitatorConfig(cdpAPIKeyID, cdpAPIKeySecret),
 		}
 	}
 
@@ -59,24 +72,6 @@ func (p *PaymentProcessor) buildFacilitatorConfigs(urls []string) []*x402types.F
 		configs[i] = &x402types.FacilitatorConfig{URL: url}
 	}
 	return configs
-}
-
-// getFacilitatorConfigs returns all facilitator configurations for failover support
-func (p *PaymentProcessor) getFacilitatorConfigs(network string) []*x402types.FacilitatorConfig {
-	entry, loaded := p.networkToConfigEntry.Load(network)
-	if !loaded {
-		entry = &ConfigEntry{
-			once:    sync.Once{},
-			configs: nil,
-		}
-		entry.(*ConfigEntry).once.Do(func() {
-			entry.(*ConfigEntry).configs = p.buildFacilitatorConfigs(p.config.networkToFacilitatorURLs[network])
-		})
-		p.networkToConfigEntry.Store(network, entry)
-	}
-
-	entry, _ = p.networkToConfigEntry.Load(network)
-	return entry.(*ConfigEntry).configs
 }
 
 // shouldRetryWithNextFacilitator determines if we should try the next facilitator
@@ -177,32 +172,35 @@ func (p *PaymentProcessor) tryFacilitatorWithCallback(
 }
 
 // ProcessPayment verifies and settles a payment with failover support across multiple facilitators
-func (p *PaymentProcessor) ProcessPayment(
+func ProcessPayment(
 	paymentPayload *x402types.PaymentPayload,
 	paymentRequirements *x402types.PaymentRequirements,
 	skipVerification bool,
 ) (*x402types.SettleResponse, error) {
-	return p.ProcessPaymentWithCallback(paymentPayload, paymentRequirements, skipVerification, nil)
+	return ProcessPaymentWithCallback(paymentPayload, paymentRequirements, skipVerification, nil)
 }
 
 // ProcessPaymentWithCallback verifies and settles a payment with an optional verification callback
-func (p *PaymentProcessor) ProcessPaymentWithCallback(
+func ProcessPaymentWithCallback(
 	paymentPayload *x402types.PaymentPayload,
 	paymentRequirements *x402types.PaymentRequirements,
 	skipVerification bool,
 	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
 ) (*x402types.SettleResponse, error) {
-	facilitatorConfigs := p.getFacilitatorConfigs(paymentPayload.Network)
+	processor := getProcessor(paymentPayload.Network)
+	if processor == nil {
+		return nil, fmt.Errorf("no processor configured for network: %s", paymentPayload.Network)
+	}
 
-	if len(facilitatorConfigs) == 0 {
+	if len(processor.facilitatorConfigs) == 0 {
 		return nil, fmt.Errorf("no facilitator configurations available")
 	}
 
 	var lastErr error
-	for i, config := range facilitatorConfigs {
-		p.logger.Info("Trying facilitator",
+	for i, config := range processor.facilitatorConfigs {
+		processor.logger.Info("Trying facilitator",
 			"index", i+1,
-			"total", len(facilitatorConfigs),
+			"total", len(processor.facilitatorConfigs),
 			"url", config.URL,
 			"network", paymentPayload.Network)
 
@@ -218,19 +216,19 @@ func (p *PaymentProcessor) ProcessPaymentWithCallback(
 			},
 		}
 
-		settleResp, err := p.tryFacilitatorWithCallback(client, paymentPayload, paymentRequirements, onVerified)
+		settleResp, err := processor.tryFacilitatorWithCallback(client, paymentPayload, paymentRequirements, onVerified)
 		if err == nil {
-			p.logger.Info("Facilitator succeeded", "url", config.URL)
+			processor.logger.Info("Facilitator succeeded", "url", config.URL)
 			if !skipVerification {
-				if verifyErr := p.VerifySettledTransaction(settleResp, paymentPayload); verifyErr != nil {
-					p.logger.Error("Transaction verification failed", "error", verifyErr)
+				if verifyErr := processor.VerifySettledTransaction(settleResp, paymentPayload); verifyErr != nil {
+					processor.logger.Error("Transaction verification failed", "error", verifyErr)
 					return nil, verifyErr
 				}
 			}
 			return settleResp, nil
 		}
 
-		p.logger.Warn("Facilitator attempt failed",
+		processor.logger.Warn("Facilitator attempt failed",
 			"url", config.URL,
 			"error", err,
 			"willRetry", shouldRetryWithNextFacilitator(err))

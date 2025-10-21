@@ -36,19 +36,26 @@ func main() {
     // Initialize RPC manager for blockchain verification
     processor.InitGlobalRPCManager(logger)
 
-    // Configure facilitators
-    config := &processor.FacilitatorConfig{
-        networkToFacilitatorURLs: map[string][]string{
-            constants.NetworkBase:        []string{"https://facilitator1.com"},
-            constants.NetworkBaseSepolia: []string{"https://testnet-facilitator.com"},
+    // Configure and initialize payment processors for each network
+    config := &processor.ProcessorConfig{
+        NetworkToFacilitatorURLs: map[string][]string{
+            constants.NetworkBase:        {"https://facilitator1.com"},
+            constants.NetworkBaseSepolia: {"https://testnet-facilitator.com"},
         },
         // Optional: Use Coinbase CDP
         CDPAPIKeyID:     os.Getenv("CDP_API_KEY_ID"),
         CDPAPIKeySecret: os.Getenv("CDP_API_KEY_SECRET"),
     }
 
-    // Create payment processor
-    paymentProcessor := processor.NewPaymentProcessor(config, logger)
+    // Initialize processor map once at startup
+    processor.InitProcessorMap(config, logger)
+
+    // Get processor for the payment's network
+    paymentProcessor := processor.GetProcessor(paymentPayload.Network)
+    if paymentProcessor == nil {
+        logger.Error("Failed to get processor", "error", err)
+        return
+    }
 
     // Process a payment
     settleResp, err := paymentProcessor.ProcessPayment(
@@ -89,18 +96,23 @@ func main() {
    - USDC token addresses
    - Chain IDs (CAIP-2 format)
 
+### Processor Map Architecture
+
+The library uses a map of network → `PaymentProcessor`:
+
+1. At startup, `InitProcessorMap()` creates one processor per network
+2. Each processor has its own pre-built list of facilitator configurations
+3. Call `GetProcessor(network)` to retrieve the processor for a specific network
+4. All facilitator configs are created once during initialization, eliminating overhead on payment processing
+
 ### Facilitator Failover
 
-The library automatically tries multiple facilitators in sequence based on the network specified in the payment payload:
+Each `PaymentProcessor` automatically tries multiple facilitators in sequence:
 
-1. Determines the network from `PaymentPayload.Network` field
-2. Retrieves the corresponding facilitator URLs for that network
-3. Attempts each facilitator in sequence:
-   - If it fails with retryable error (timeout, 5xx, auth), tries next
-   - If it fails with client error (4xx, invalid signature), returns error immediately
+1. Attempts each facilitator in the pre-built configuration list
+2. If it fails with retryable error (timeout, 5xx, auth), tries next
+3. If it fails with client error (4xx, invalid signature), returns error immediately
 4. Continues until success or all facilitators exhausted
-
-Facilitator configurations are lazily initialized and cached per network for efficiency.
 
 ### Optional Blockchain Verification
 
@@ -116,12 +128,19 @@ After facilitator settlement, the library:
 
 ## API Reference
 
+### Processor Initialization
+
+```go
+// Initialize processor map once at startup
+func InitProcessorMap(config *ProcessorConfig, logger *slog.Logger)
+
+// Get processor for a specific network
+func GetProcessor(network string) (*PaymentProcessor, error)
+```
+
 ### PaymentProcessor
 
 ```go
-// Create a new payment processor
-func NewPaymentProcessor(config *FacilitatorConfig, logger *slog.Logger) *PaymentProcessor
-
 // Process payment without callback
 func (p *PaymentProcessor) ProcessPayment(
     paymentPayload *x402types.PaymentPayload,
@@ -154,14 +173,18 @@ func (r *RPCManager) GetTransactionReceipt(network, txHash string) (*ethtypes.Re
 ### Configuration
 
 ```go
-type FacilitatorConfig struct {
-    networkToFacilitatorURLs map[string][]string // Map of network names to facilitator URLs
-    CDPAPIKeyID              string               // Optional: Coinbase CDP API key ID
-    CDPAPIKeySecret          string               // Optional: Coinbase CDP API secret
+type ProcessorConfig struct {
+    NetworkToFacilitatorURLs map[string][]string // Map of network names to facilitator URLs
+    CDPAPIKeyID              string              // Optional: Coinbase CDP API key ID
+    CDPAPIKeySecret          string              // Optional: Coinbase CDP API secret
 }
 ```
 
-**Note**: The network-to-facilitator URL mapping allows you to configure different facilitators for different networks (e.g., `constants.NetworkBase`, `constants.NetworkBaseSepolia`).
+**Note**:
+- Initialize the processor map once at application startup using `InitProcessorMap()`
+- Each network gets its own `PaymentProcessor` with pre-built facilitator configurations
+- Facilitator configs are created once during initialization, not on every payment
+- Use `GetProcessor(network)` to retrieve the processor for a specific network
 
 ## Development
 

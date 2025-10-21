@@ -5,8 +5,6 @@ import (
 	"os"
 	"testing"
 
-	"x402pay/pkg/constants"
-
 	x402types "github.com/coinbase/x402/go/pkg/types"
 	"github.com/stretchr/testify/assert"
 )
@@ -85,18 +83,15 @@ func TestGlobalRPCManagerCreation(t *testing.T) {
 }
 
 func TestProcessorWithBlockchainVerification(t *testing.T) {
-	config := &FacilitatorsConfig{
-		networkToFacilitatorURLs: map[string][]string{
-			constants.NetworkBaseSepolia: []string{"https://testnet.example.com"},
-		},
-	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	processor := NewPaymentProcessor(config, logger)
+	processor := &PaymentProcessor{
+		facilitatorConfigs: []*x402types.FacilitatorConfig{{URL: "https://testnet.example.com"}},
+		logger:             logger,
+	}
 
 	assert.NotNil(t, processor)
 	assert.Equal(t, logger, processor.logger)
-	assert.Equal(t, config, processor.config)
 
 	// Initialize and verify global RPC manager
 	InitGlobalRPCManager(logger)
