@@ -10,11 +10,6 @@ import (
 )
 
 func TestExtractTransactionHash(t *testing.T) {
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	processor := &PaymentProcessor{
-		logger: logger,
-	}
-
 	tests := []struct {
 		name          string
 		settleResp    *x402types.SettleResponse
@@ -57,7 +52,7 @@ func TestExtractTransactionHash(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := processor.extractTransactionHash(tt.settleResp)
+			result, err := extractTransactionHash(tt.settleResp)
 
 			if tt.expectedError {
 				assert.Error(t, err)

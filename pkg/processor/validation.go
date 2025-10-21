@@ -12,7 +12,7 @@ import (
 )
 
 // extractTransactionHash extracts the transaction hash from a settle response
-func (p *PaymentProcessor) extractTransactionHash(settleResponse *x402types.SettleResponse) (string, error) {
+func extractTransactionHash(settleResponse *x402types.SettleResponse) (string, error) {
 	// The settle response contains transaction hash in the Transaction field
 	txHash := settleResponse.Transaction
 	if txHash == "" {
@@ -88,12 +88,17 @@ func (p *PaymentProcessor) validateTransactionParameters(
 }
 
 // VerifySettledTransaction verifies that the facilitator-settled transaction actually occurred on blockchain
-func (p *PaymentProcessor) VerifySettledTransaction(
+func VerifySettledTransaction(
 	settleResponse *x402types.SettleResponse,
 	paymentPayload *x402types.PaymentPayload,
 ) error {
+	processor := getProcessor(paymentPayload.Network)
+	if processor == nil {
+		return fmt.Errorf("no processor configured for network: %s", paymentPayload.Network)
+	}
+
 	// Extract transaction hash from settle response
-	txHash, err := p.extractTransactionHash(settleResponse)
+	txHash, err := extractTransactionHash(settleResponse)
 	if err != nil {
 		return fmt.Errorf("failed to extract transaction hash: %w", err)
 	}
@@ -107,16 +112,16 @@ func (p *PaymentProcessor) VerifySettledTransaction(
 
 	if receipt == nil {
 		// No RPC endpoints available - skip verification
-		p.logger.Warn("skipping blockchain verification - no RPC endpoints available")
+		processor.logger.Warn("skipping blockchain verification - no RPC endpoints available")
 		return nil
 	}
 
 	// Verify transaction parameters match what was signed
-	if err := p.validateTransactionParameters(receipt, paymentPayload); err != nil {
+	if err := processor.validateTransactionParameters(receipt, paymentPayload); err != nil {
 		return fmt.Errorf("transaction validation failed: %w", err)
 	}
 
-	p.logger.Info("blockchain verification successful")
+	processor.logger.Info("blockchain verification successful")
 
 	return nil
 }
