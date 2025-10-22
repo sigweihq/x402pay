@@ -142,30 +142,19 @@ func shouldRetryWithNextFacilitator(err error) bool {
 	return false
 }
 
-// tryFacilitatorWithCallback attempts payment verification and settlement with a single facilitator
-func (p *PaymentProcessor) tryFacilitatorWithCallback(
+// tryVerifyWithFacilitator attempts payment verification with a single facilitator
+func (p *PaymentProcessor) tryVerifyWithFacilitator(
 	client *facilitatorclient.FacilitatorClient,
 	paymentPayload *x402types.PaymentPayload,
 	paymentRequirements *x402types.PaymentRequirements,
 	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
-) (*x402types.SettleResponse, error) {
-	// Verify payment - safely log details with nil checks
-	logAttrs := []any{"network", paymentPayload.Network}
-	if paymentPayload.Payload != nil && paymentPayload.Payload.Authorization != nil {
-		logAttrs = append(logAttrs,
-			"from", paymentPayload.Payload.Authorization.From,
-			"to", paymentPayload.Payload.Authorization.To,
-			"value", paymentPayload.Payload.Authorization.Value)
-	}
-	p.logger.Info("Starting payment verification with facilitator", logAttrs...)
+) (*x402types.VerifyResponse, error) {
 
 	verifyResp, err := client.Verify(paymentPayload, paymentRequirements)
 	if err != nil {
 		p.logger.Error("Payment verification failed", "error", err)
 		return nil, fmt.Errorf("payment verification failed: %w", err)
 	}
-
-	p.logger.Info("Payment verification response received", "isValid", verifyResp.IsValid)
 
 	if !verifyResp.IsValid {
 		reason := "unknown"
@@ -182,8 +171,22 @@ func (p *PaymentProcessor) tryFacilitatorWithCallback(
 		}
 	}
 
+	return verifyResp, nil
+}
+
+// tryFacilitatorWithCallback attempts payment verification and settlement with a single facilitator
+func (p *PaymentProcessor) tryFacilitatorWithCallback(
+	client *facilitatorclient.FacilitatorClient,
+	paymentPayload *x402types.PaymentPayload,
+	paymentRequirements *x402types.PaymentRequirements,
+	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
+) (*x402types.SettleResponse, error) {
+	_, err := p.tryVerifyWithFacilitator(client, paymentPayload, paymentRequirements, onVerified)
+	if err != nil {
+		return nil, err
+	}
+
 	// Settle payment
-	p.logger.Info("Starting payment settlement")
 	settleResp, err := client.Settle(paymentPayload, paymentRequirements)
 	if err != nil {
 		p.logger.Error("Payment settlement failed", "error", err)
@@ -249,6 +252,59 @@ func ProcessPaymentWithCallback(
 		}
 
 		processor.logger.Warn("Facilitator attempt failed",
+			"url", client.URL,
+			"error", err,
+			"willRetry", shouldRetryWithNextFacilitator(err))
+
+		lastErr = err
+
+		// Don't retry for validation/client errors
+		if !shouldRetryWithNextFacilitator(err) {
+			return nil, err
+		}
+	}
+
+	return nil, fmt.Errorf("all facilitators failed, last error: %w", lastErr)
+}
+
+// VerifyPayment verifies a payment with failover support across multiple facilitators
+func VerifyPayment(
+	paymentPayload *x402types.PaymentPayload,
+	paymentRequirements *x402types.PaymentRequirements,
+) (*x402types.VerifyResponse, error) {
+	return VerifyPaymentWithCallback(paymentPayload, paymentRequirements, nil)
+}
+
+// VerifyPaymentWithCallback verifies a payment with an optional verification callback
+func VerifyPaymentWithCallback(
+	paymentPayload *x402types.PaymentPayload,
+	paymentRequirements *x402types.PaymentRequirements,
+	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
+) (*x402types.VerifyResponse, error) {
+	processor := getProcessor(paymentPayload.Network)
+	if processor == nil {
+		return nil, fmt.Errorf("no processor configured for network: %s", paymentPayload.Network)
+	}
+
+	if len(processor.facilitatorClients) == 0 {
+		return nil, fmt.Errorf("no facilitator clients available")
+	}
+
+	var lastErr error
+	for i, client := range processor.facilitatorClients {
+		processor.logger.Info("Trying facilitator for verification",
+			"index", i+1,
+			"total", len(processor.facilitatorClients),
+			"url", client.URL,
+			"network", paymentPayload.Network)
+
+		verifyResp, err := processor.tryVerifyWithFacilitator(client, paymentPayload, paymentRequirements, onVerified)
+		if err == nil {
+			processor.logger.Info("Facilitator verification succeeded", "url", client.URL)
+			return verifyResp, nil
+		}
+
+		processor.logger.Warn("Facilitator verification attempt failed",
 			"url", client.URL,
 			"error", err,
 			"willRetry", shouldRetryWithNextFacilitator(err))
