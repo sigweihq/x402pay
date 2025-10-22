@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/coinbase/x402/go/pkg/facilitatorclient"
 	x402types "github.com/coinbase/x402/go/pkg/types"
 	"github.com/stretchr/testify/assert"
 )
@@ -80,11 +81,9 @@ func TestGlobalRPCManagerCreation(t *testing.T) {
 func TestProcessorWithBlockchainVerification(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	// Create a test client instead of config
-	clients := bootstrapFacilitatorClients([]string{"https://testnet.example.com"}, "", "")
-
+	// Create a test processor with empty client list for testing structure
 	processor := &PaymentProcessor{
-		facilitatorClients: clients,
+		facilitatorClients: []*facilitatorclient.FacilitatorClient{},
 		logger:             logger,
 	}
 

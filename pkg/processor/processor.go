@@ -22,9 +22,9 @@ var (
 
 // ProcessorConfig holds the configuration for payment processors
 type ProcessorConfig struct {
-	NetworkToFacilitatorURLs map[string][]string // Map of network name to facilitator URLs
-	CDPAPIKeyID              string              // Optional: Coinbase CDP API key ID
-	CDPAPIKeySecret          string              // Optional: Coinbase CDP API secret
+	FacilitatorURLs []string
+	CDPAPIKeyID     string // Optional: Coinbase CDP API key ID
+	CDPAPIKeySecret string // Optional: Coinbase CDP API secret
 }
 
 // PaymentProcessor handles x402 payment verification and settlement with failover support
@@ -41,8 +41,8 @@ func InitProcessorMap(config *ProcessorConfig, logger *slog.Logger) {
 	}
 
 	processorMapOnce.Do(func() {
-		for network, urls := range config.NetworkToFacilitatorURLs {
-			facilitatorClients := bootstrapFacilitatorClients(urls, config.CDPAPIKeyID, config.CDPAPIKeySecret)
+		networkToClients := bootstrapFacilitatorClients(config.FacilitatorURLs, config.CDPAPIKeyID, config.CDPAPIKeySecret)
+		for network, facilitatorClients := range networkToClients {
 			processor := &PaymentProcessor{
 				facilitatorClients: facilitatorClients,
 				logger:             logger,
@@ -61,9 +61,8 @@ func getProcessor(network string) *PaymentProcessor {
 }
 
 // bootstrapFacilitatorClients creates pre-configured facilitator clients from URLs or CDP credentials
-func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret string) []*facilitatorclient.FacilitatorClient {
-	clients := make([]*facilitatorclient.FacilitatorClient, 0)
-
+func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret string) map[string][]*facilitatorclient.FacilitatorClient {
+	networkToClients := make(map[string][]*facilitatorclient.FacilitatorClient)
 	// Create HTTP client with timeouts once, reused for all clients
 	httpClient := &http.Client{
 		Timeout: constants.FacilitatorTimeout,
@@ -77,22 +76,29 @@ func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret str
 	// If CDP credentials are provided, only use CDP facilitator
 	if cdpAPIKeyID != "" && cdpAPIKeySecret != "" {
 		config := coinbasefacilitator.CreateFacilitatorConfig(cdpAPIKeyID, cdpAPIKeySecret)
-		clients = append(clients, makeClient(config, httpClient))
+		client, supported := makeClient(config, httpClient)
+		for _, network := range supported {
+			networkToClients[network] = append(networkToClients[network], client)
+		}
 	}
 
 	// Create clients for each provided URL
 	for _, url := range urls {
 		config := &x402types.FacilitatorConfig{URL: url}
-		clients = append(clients, makeClient(config, httpClient))
+		client, supported := makeClient(config, httpClient)
+		for _, network := range supported {
+			networkToClients[network] = append(networkToClients[network], client)
+		}
 	}
 
-	return clients
+	return networkToClients
 }
 
-func makeClient(config *x402types.FacilitatorConfig, httpClient *http.Client) *facilitatorclient.FacilitatorClient {
+func makeClient(config *x402types.FacilitatorConfig, httpClient *http.Client) (*facilitatorclient.FacilitatorClient, []string) {
 	client := facilitatorclient.NewFacilitatorClient(config)
 	client.HTTPClient = httpClient
-	return client
+	supportedNetworks := Supported(client)
+	return client, supportedNetworks
 }
 
 // shouldRetryWithNextFacilitator determines if we should try the next facilitator

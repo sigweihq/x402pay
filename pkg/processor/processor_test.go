@@ -1,7 +1,10 @@
 package processor
 
 import (
+	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sync"
 	"testing"
@@ -111,17 +114,39 @@ func TestShouldRetryWithNextFacilitator(t *testing.T) {
 	}
 }
 
-func TestInitProcessorMap(t *testing.T) {
-	config := &ProcessorConfig{
-		NetworkToFacilitatorURLs: map[string][]string{
-			constants.NetworkBase:        {"https://facilitator1.com", "https://facilitator2.com"},
-			constants.NetworkBaseSepolia: {"https://testnet1.com", "https://testnet2.com"},
-		},
-		CDPAPIKeyID:     "test-key-id",
-		CDPAPIKeySecret: "test-secret",
-	}
+// mockFacilitatorServer creates a test HTTP server that responds to /supported endpoint
+func mockFacilitatorServer(networks []string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/supported" {
+			kinds := make([]map[string]string, len(networks))
+			for i, network := range networks {
+				kinds[i] = map[string]string{
+					"scheme":  "exact",
+					"network": network,
+				}
+			}
+			response := map[string]any{
+				"kinds": kinds,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+		}
+	}))
+}
 
+func TestInitProcessorMap(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	// Create mock facilitator servers
+	server1 := mockFacilitatorServer([]string{constants.NetworkBase, constants.NetworkBaseSepolia})
+	defer server1.Close()
+
+	server2 := mockFacilitatorServer([]string{constants.NetworkBase})
+	defer server2.Close()
+
+	config := &ProcessorConfig{
+		FacilitatorURLs: []string{server1.URL, server2.URL},
+	}
 
 	// Reset state for testing
 	processorMap = sync.Map{}
@@ -132,9 +157,11 @@ func TestInitProcessorMap(t *testing.T) {
 	// Verify processors were created for each network
 	baseProcessor := getProcessor(constants.NetworkBase)
 	assert.NotNil(t, baseProcessor)
+	assert.Len(t, baseProcessor.facilitatorClients, 2) // Both servers support base
 
 	sepoliaProcessor := getProcessor(constants.NetworkBaseSepolia)
 	assert.NotNil(t, sepoliaProcessor)
+	assert.Len(t, sepoliaProcessor.facilitatorClients, 1) // Only server1 supports sepolia
 
 	// Verify error for unknown network
 	unknownProcessor := getProcessor("unknown-network")
@@ -144,58 +171,85 @@ func TestInitProcessorMap(t *testing.T) {
 func TestProcessorFacilitatorConfigs(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	// Test with CDP credentials - should use CDP first, then also add URL-based clients for failover
-	configWithCDP := &ProcessorConfig{
-		NetworkToFacilitatorURLs: map[string][]string{
-			constants.NetworkBase:        {"https://facilitator1.com", "https://facilitator2.com"},
-			constants.NetworkBaseSepolia: {"https://testnet1.com", "https://testnet2.com"},
-		},
-		CDPAPIKeyID:     "test-key-id",
-		CDPAPIKeySecret: "test-secret",
-	}
+	t.Run("multiple facilitators with different network support", func(t *testing.T) {
+		// Create mock facilitator servers
+		// Mock for https://facilitator.x402.rs/ - supports both networks
+		server1 := mockFacilitatorServer([]string{constants.NetworkBase, constants.NetworkBaseSepolia})
+		defer server1.Close()
 
-	// Reset state for testing
-	processorMap = sync.Map{}
-	processorMapOnce = sync.Once{}
+		// Mock for https://www.x402.org/facilitator - supports only sepolia
+		server2 := mockFacilitatorServer([]string{constants.NetworkBaseSepolia})
+		defer server2.Close()
 
-	InitProcessorMap(configWithCDP, logger)
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server1.URL, server2.URL},
+		}
 
-	// When CDP credentials are present, should use CDP facilitator first, then URL-based clients
-	testnetProcessor := getProcessor(constants.NetworkBaseSepolia)
-	assert.Len(t, testnetProcessor.facilitatorClients, 3) // 1 CDP + 2 URLs
-	assert.Equal(t, "https://api.cdp.coinbase.com/platform/v2/x402", testnetProcessor.facilitatorClients[0].URL)
-	assert.Equal(t, "https://testnet1.com", testnetProcessor.facilitatorClients[1].URL)
-	assert.Equal(t, "https://testnet2.com", testnetProcessor.facilitatorClients[2].URL)
+		// Reset state for testing
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
 
-	mainnetProcessor := getProcessor(constants.NetworkBase)
-	assert.Len(t, mainnetProcessor.facilitatorClients, 3) // 1 CDP + 2 URLs
-	assert.Equal(t, "https://api.cdp.coinbase.com/platform/v2/x402", mainnetProcessor.facilitatorClients[0].URL)
-	assert.Equal(t, "https://facilitator1.com", mainnetProcessor.facilitatorClients[1].URL)
-	assert.Equal(t, "https://facilitator2.com", mainnetProcessor.facilitatorClients[2].URL)
+		InitProcessorMap(config, logger)
 
-	// Test without CDP credentials - should use configured URLs
-	configWithoutCDP := &ProcessorConfig{
-		NetworkToFacilitatorURLs: map[string][]string{
-			constants.NetworkBase:        {"https://facilitator1.com", "https://facilitator2.com"},
-			constants.NetworkBaseSepolia: {"https://testnet1.com", "https://testnet2.com"},
-		},
-	}
+		// Sepolia should have both facilitators
+		sepoliaProcessor := getProcessor(constants.NetworkBaseSepolia)
+		assert.NotNil(t, sepoliaProcessor)
+		assert.Len(t, sepoliaProcessor.facilitatorClients, 2) // Both servers support sepolia
+		assert.Equal(t, server1.URL, sepoliaProcessor.facilitatorClients[0].URL)
+		assert.Equal(t, server2.URL, sepoliaProcessor.facilitatorClients[1].URL)
 
-	// Reset state for testing
-	processorMap = sync.Map{}
-	processorMapOnce = sync.Once{}
+		// Base should only have server1
+		baseProcessor := getProcessor(constants.NetworkBase)
+		assert.NotNil(t, baseProcessor)
+		assert.Len(t, baseProcessor.facilitatorClients, 1) // Only server1 supports base
+		assert.Equal(t, server1.URL, baseProcessor.facilitatorClients[0].URL)
+	})
 
-	InitProcessorMap(configWithoutCDP, logger)
+	t.Run("single facilitator supporting multiple networks", func(t *testing.T) {
+		// Create mock facilitator that supports both networks
+		server := mockFacilitatorServer([]string{constants.NetworkBase, constants.NetworkBaseSepolia})
+		defer server.Close()
 
-	testnetProcessorNoCDP := getProcessor(constants.NetworkBaseSepolia)
-	assert.Len(t, testnetProcessorNoCDP.facilitatorClients, 2)
-	assert.Equal(t, "https://testnet1.com", testnetProcessorNoCDP.facilitatorClients[0].URL)
-	assert.Equal(t, "https://testnet2.com", testnetProcessorNoCDP.facilitatorClients[1].URL)
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server.URL},
+		}
 
-	mainnetProcessorNoCDP := getProcessor(constants.NetworkBase)
-	assert.Len(t, mainnetProcessorNoCDP.facilitatorClients, 2)
-	assert.Equal(t, "https://facilitator1.com", mainnetProcessorNoCDP.facilitatorClients[0].URL)
-	assert.Equal(t, "https://facilitator2.com", mainnetProcessorNoCDP.facilitatorClients[1].URL)
+		// Reset state for testing
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+
+		InitProcessorMap(config, logger)
+
+		// Both networks should have the same facilitator
+		sepoliaProcessor := getProcessor(constants.NetworkBaseSepolia)
+		assert.NotNil(t, sepoliaProcessor)
+		assert.Len(t, sepoliaProcessor.facilitatorClients, 1)
+		assert.Equal(t, server.URL, sepoliaProcessor.facilitatorClients[0].URL)
+
+		baseProcessor := getProcessor(constants.NetworkBase)
+		assert.NotNil(t, baseProcessor)
+		assert.Len(t, baseProcessor.facilitatorClients, 1)
+		assert.Equal(t, server.URL, baseProcessor.facilitatorClients[0].URL)
+	})
+
+	t.Run("no facilitators configured", func(t *testing.T) {
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{},
+		}
+
+		// Reset state for testing
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+
+		InitProcessorMap(config, logger)
+
+		// No processors should be created
+		baseProcessor := getProcessor(constants.NetworkBase)
+		assert.Nil(t, baseProcessor)
+
+		sepoliaProcessor := getProcessor(constants.NetworkBaseSepolia)
+		assert.Nil(t, sepoliaProcessor)
+	})
 }
 
 // MockError is a simple error type for testing
