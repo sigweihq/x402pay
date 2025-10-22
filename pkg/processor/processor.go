@@ -47,6 +47,10 @@ func InitProcessorMap(config *ProcessorConfig, logger *slog.Logger) {
 				facilitatorClients: facilitatorClients,
 				logger:             logger,
 			}
+			logger.Info("Payment processor initialized", "network", network, "facilitators", len(facilitatorClients))
+			for i, client := range facilitatorClients {
+				logger.Info("Facilitator client initialized", "index", i+1, "url", client.URL)
+			}
 			processorMap.Store(network, processor)
 		}
 	})
