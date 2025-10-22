@@ -80,8 +80,11 @@ func TestGlobalRPCManagerCreation(t *testing.T) {
 func TestProcessorWithBlockchainVerification(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
+	// Create a test client instead of config
+	clients := bootstrapFacilitatorClients([]string{"https://testnet.example.com"}, "", "")
+
 	processor := &PaymentProcessor{
-		facilitatorConfigs: []*x402types.FacilitatorConfig{{URL: "https://testnet.example.com"}},
+		facilitatorClients: clients,
 		logger:             logger,
 	}
 

@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -28,7 +29,7 @@ type ProcessorConfig struct {
 
 // PaymentProcessor handles x402 payment verification and settlement with failover support
 type PaymentProcessor struct {
-	facilitatorConfigs []*x402types.FacilitatorConfig
+	facilitatorClients []*facilitatorclient.FacilitatorClient
 	logger             *slog.Logger
 }
 
@@ -41,9 +42,9 @@ func InitProcessorMap(config *ProcessorConfig, logger *slog.Logger) {
 
 	processorMapOnce.Do(func() {
 		for network, urls := range config.NetworkToFacilitatorURLs {
-			facilitatorConfigs := buildFacilitatorConfigs(urls, config.CDPAPIKeyID, config.CDPAPIKeySecret)
+			facilitatorClients := bootstrapFacilitatorClients(urls, config.CDPAPIKeyID, config.CDPAPIKeySecret)
 			processor := &PaymentProcessor{
-				facilitatorConfigs: facilitatorConfigs,
+				facilitatorClients: facilitatorClients,
 				logger:             logger,
 			}
 			processorMap.Store(network, processor)
@@ -59,27 +60,39 @@ func getProcessor(network string) *PaymentProcessor {
 	return processor.(*PaymentProcessor)
 }
 
-func GetFirstFacilitatorConfig(network string) *x402types.FacilitatorConfig {
-	processor := getProcessor(network)
-	if processor == nil {
-		return nil
+// bootstrapFacilitatorClients creates pre-configured facilitator clients from URLs or CDP credentials
+func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret string) []*facilitatorclient.FacilitatorClient {
+	clients := make([]*facilitatorclient.FacilitatorClient, 0)
+
+	// Create HTTP client with timeouts once, reused for all clients
+	httpClient := &http.Client{
+		Timeout: constants.FacilitatorTimeout,
+		Transport: &http.Transport{
+			TLSHandshakeTimeout:   constants.TLSHandshakeTimeout,
+			ResponseHeaderTimeout: constants.ResponseHeaderTimeout,
+			ExpectContinueTimeout: constants.ExpectContinueTimeout,
+		},
 	}
-	return processor.facilitatorConfigs[0]
+
+	// If CDP credentials are provided, only use CDP facilitator
+	if cdpAPIKeyID != "" && cdpAPIKeySecret != "" {
+		config := coinbasefacilitator.CreateFacilitatorConfig(cdpAPIKeyID, cdpAPIKeySecret)
+		clients = append(clients, makeClient(config, httpClient))
+	}
+
+	// Create clients for each provided URL
+	for _, url := range urls {
+		config := &x402types.FacilitatorConfig{URL: url}
+		clients = append(clients, makeClient(config, httpClient))
+	}
+
+	return clients
 }
 
-// buildFacilitatorConfigs creates facilitator configurations from URLs or CDP credentials
-func buildFacilitatorConfigs(urls []string, cdpAPIKeyID, cdpAPIKeySecret string) []*x402types.FacilitatorConfig {
-	if cdpAPIKeyID != "" && cdpAPIKeySecret != "" {
-		return []*x402types.FacilitatorConfig{
-			coinbasefacilitator.CreateFacilitatorConfig(cdpAPIKeyID, cdpAPIKeySecret),
-		}
-	}
-
-	configs := make([]*x402types.FacilitatorConfig, len(urls))
-	for i, url := range urls {
-		configs[i] = &x402types.FacilitatorConfig{URL: url}
-	}
-	return configs
+func makeClient(config *x402types.FacilitatorConfig, httpClient *http.Client) *facilitatorclient.FacilitatorClient {
+	client := facilitatorclient.NewFacilitatorClient(config)
+	client.HTTPClient = httpClient
+	return client
 }
 
 // shouldRetryWithNextFacilitator determines if we should try the next facilitator
@@ -200,33 +213,21 @@ func ProcessPaymentWithCallback(
 		return nil, fmt.Errorf("no processor configured for network: %s", paymentPayload.Network)
 	}
 
-	if len(processor.facilitatorConfigs) == 0 {
-		return nil, fmt.Errorf("no facilitator configurations available")
+	if len(processor.facilitatorClients) == 0 {
+		return nil, fmt.Errorf("no facilitator clients available")
 	}
 
 	var lastErr error
-	for i, config := range processor.facilitatorConfigs {
+	for i, client := range processor.facilitatorClients {
 		processor.logger.Info("Trying facilitator",
 			"index", i+1,
-			"total", len(processor.facilitatorConfigs),
-			"url", config.URL,
+			"total", len(processor.facilitatorClients),
+			"url", client.URL,
 			"network", paymentPayload.Network)
-
-		// Create facilitator client with custom HTTP client that has timeouts
-		// This prevents hanging indefinitely when facilitators are slow/unresponsive
-		client := facilitatorclient.NewFacilitatorClient(config)
-		client.HTTPClient = &http.Client{
-			Timeout: constants.FacilitatorTimeout,
-			Transport: &http.Transport{
-				TLSHandshakeTimeout:   constants.TLSHandshakeTimeout,
-				ResponseHeaderTimeout: constants.ResponseHeaderTimeout,
-				ExpectContinueTimeout: constants.ExpectContinueTimeout,
-			},
-		}
 
 		settleResp, err := processor.tryFacilitatorWithCallback(client, paymentPayload, paymentRequirements, onVerified)
 		if err == nil {
-			processor.logger.Info("Facilitator succeeded", "url", config.URL)
+			processor.logger.Info("Facilitator succeeded", "url", client.URL)
 			if !skipVerification {
 				if verifyErr := VerifySettledTransaction(settleResp, paymentPayload); verifyErr != nil {
 					processor.logger.Error("Transaction verification failed", "error", verifyErr)
@@ -237,7 +238,7 @@ func ProcessPaymentWithCallback(
 		}
 
 		processor.logger.Warn("Facilitator attempt failed",
-			"url", config.URL,
+			"url", client.URL,
 			"error", err,
 			"willRetry", shouldRetryWithNextFacilitator(err))
 
@@ -250,4 +251,33 @@ func ProcessPaymentWithCallback(
 	}
 
 	return nil, fmt.Errorf("all facilitators failed, last error: %w", lastErr)
+}
+
+func Supported(c *facilitatorclient.FacilitatorClient) []string {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/supported", c.URL), nil)
+	if err != nil {
+		return []string{}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return []string{}
+	}
+	defer resp.Body.Close()
+
+	networks := make([]string, 0)
+	var supportedNetworks struct {
+		Kinds []struct {
+			Scheme  string `json:"scheme"`
+			Network string `json:"network"`
+		} `json:"kinds"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&supportedNetworks); err != nil {
+		return []string{}
+	}
+	for _, kind := range supportedNetworks.Kinds {
+		networks = append(networks, kind.Network)
+	}
+
+	return networks
 }

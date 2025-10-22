@@ -33,9 +33,9 @@ type ChainListRPCEntry struct {
 
 // RPCManager handles blockchain RPC endpoints and failover
 type RPCManager struct {
-	endpoints        map[int64][]string // chainID -> []rpc_urls
-	logger           *slog.Logger
-	mu               sync.RWMutex
+	endpoints         map[int64][]string // chainID -> []rpc_urls
+	logger            *slog.Logger
+	mu                sync.RWMutex
 	networksToMonitor map[string]bool // only health check these networks
 }
 

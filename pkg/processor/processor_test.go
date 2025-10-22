@@ -144,7 +144,7 @@ func TestInitProcessorMap(t *testing.T) {
 func TestProcessorFacilitatorConfigs(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	// Test with CDP credentials - should use CDP for all networks
+	// Test with CDP credentials - should use CDP first, then also add URL-based clients for failover
 	configWithCDP := &ProcessorConfig{
 		NetworkToFacilitatorURLs: map[string][]string{
 			constants.NetworkBase:        {"https://facilitator1.com", "https://facilitator2.com"},
@@ -160,14 +160,18 @@ func TestProcessorFacilitatorConfigs(t *testing.T) {
 
 	InitProcessorMap(configWithCDP, logger)
 
-	// When CDP credentials are present, should use CDP facilitator
+	// When CDP credentials are present, should use CDP facilitator first, then URL-based clients
 	testnetProcessor := getProcessor(constants.NetworkBaseSepolia)
-	assert.Len(t, testnetProcessor.facilitatorConfigs, 1)
-	assert.Equal(t, "https://api.cdp.coinbase.com/platform/v2/x402", testnetProcessor.facilitatorConfigs[0].URL)
+	assert.Len(t, testnetProcessor.facilitatorClients, 3) // 1 CDP + 2 URLs
+	assert.Equal(t, "https://api.cdp.coinbase.com/platform/v2/x402", testnetProcessor.facilitatorClients[0].URL)
+	assert.Equal(t, "https://testnet1.com", testnetProcessor.facilitatorClients[1].URL)
+	assert.Equal(t, "https://testnet2.com", testnetProcessor.facilitatorClients[2].URL)
 
 	mainnetProcessor := getProcessor(constants.NetworkBase)
-	assert.Len(t, mainnetProcessor.facilitatorConfigs, 1)
-	assert.Equal(t, "https://api.cdp.coinbase.com/platform/v2/x402", mainnetProcessor.facilitatorConfigs[0].URL)
+	assert.Len(t, mainnetProcessor.facilitatorClients, 3) // 1 CDP + 2 URLs
+	assert.Equal(t, "https://api.cdp.coinbase.com/platform/v2/x402", mainnetProcessor.facilitatorClients[0].URL)
+	assert.Equal(t, "https://facilitator1.com", mainnetProcessor.facilitatorClients[1].URL)
+	assert.Equal(t, "https://facilitator2.com", mainnetProcessor.facilitatorClients[2].URL)
 
 	// Test without CDP credentials - should use configured URLs
 	configWithoutCDP := &ProcessorConfig{
@@ -184,14 +188,14 @@ func TestProcessorFacilitatorConfigs(t *testing.T) {
 	InitProcessorMap(configWithoutCDP, logger)
 
 	testnetProcessorNoCDP := getProcessor(constants.NetworkBaseSepolia)
-	assert.Len(t, testnetProcessorNoCDP.facilitatorConfigs, 2)
-	assert.Equal(t, "https://testnet1.com", testnetProcessorNoCDP.facilitatorConfigs[0].URL)
-	assert.Equal(t, "https://testnet2.com", testnetProcessorNoCDP.facilitatorConfigs[1].URL)
+	assert.Len(t, testnetProcessorNoCDP.facilitatorClients, 2)
+	assert.Equal(t, "https://testnet1.com", testnetProcessorNoCDP.facilitatorClients[0].URL)
+	assert.Equal(t, "https://testnet2.com", testnetProcessorNoCDP.facilitatorClients[1].URL)
 
 	mainnetProcessorNoCDP := getProcessor(constants.NetworkBase)
-	assert.Len(t, mainnetProcessorNoCDP.facilitatorConfigs, 2)
-	assert.Equal(t, "https://facilitator1.com", mainnetProcessorNoCDP.facilitatorConfigs[0].URL)
-	assert.Equal(t, "https://facilitator2.com", mainnetProcessorNoCDP.facilitatorConfigs[1].URL)
+	assert.Len(t, mainnetProcessorNoCDP.facilitatorClients, 2)
+	assert.Equal(t, "https://facilitator1.com", mainnetProcessorNoCDP.facilitatorClients[0].URL)
+	assert.Equal(t, "https://facilitator2.com", mainnetProcessorNoCDP.facilitatorClients[1].URL)
 }
 
 // MockError is a simple error type for testing
