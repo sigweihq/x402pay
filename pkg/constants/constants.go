@@ -18,8 +18,10 @@ const (
 
 // Network Types
 const (
-	NetworkBase        = "base"
-	NetworkBaseSepolia = "base-sepolia"
+	NetworkBase         = "base"
+	NetworkBaseSepolia  = "base-sepolia"
+	NetworkSolana       = "solana"
+	NetworkSolanaDevnet = "solana-devnet"
 )
 
 var NetworkToUSDCAddress = map[string]string{

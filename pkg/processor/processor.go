@@ -80,20 +80,19 @@ func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret str
 	// If CDP credentials are provided, only use CDP facilitator
 	if cdpAPIKeyID != "" && cdpAPIKeySecret != "" {
 		config := coinbasefacilitator.CreateFacilitatorConfig(cdpAPIKeyID, cdpAPIKeySecret)
-		config, err := CreateCdpAuthHeaders(config, cdpAPIKeyID, cdpAPIKeySecret)
-		if err == nil {
-			client, supported := makeClient(config, httpClient)
-			for _, network := range supported {
-				networkToClients[network] = append(networkToClients[network], client)
-			}
+		client := makeClient(config, httpClient)
+		supportedNetworks := []string{constants.NetworkBase, constants.NetworkBaseSepolia, constants.NetworkSolana, constants.NetworkSolanaDevnet}
+		for _, network := range supportedNetworks {
+			networkToClients[network] = append(networkToClients[network], client)
 		}
 	}
 
 	// Create clients for each provided URL
 	for _, url := range urls {
 		config := &x402types.FacilitatorConfig{URL: url}
-		client, supported := makeClient(config, httpClient)
-		for _, network := range supported {
+		client := makeClient(config, httpClient)
+		supportedNetworks := Supported(client)
+		for _, network := range supportedNetworks {
 			networkToClients[network] = append(networkToClients[network], client)
 		}
 	}
@@ -101,11 +100,10 @@ func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret str
 	return networkToClients
 }
 
-func makeClient(config *x402types.FacilitatorConfig, httpClient *http.Client) (*facilitatorclient.FacilitatorClient, []string) {
+func makeClient(config *x402types.FacilitatorConfig, httpClient *http.Client) *facilitatorclient.FacilitatorClient {
 	client := facilitatorclient.NewFacilitatorClient(config)
 	client.HTTPClient = httpClient
-	supportedNetworks := Supported(client)
-	return client, supportedNetworks
+	return client
 }
 
 // shouldRetryWithNextFacilitator determines if we should try the next facilitator
@@ -293,40 +291,4 @@ func Supported(c *facilitatorclient.FacilitatorClient) []string {
 	}
 
 	return networks
-}
-
-// CreateCdpAuthHeaders creates CDP auth headers
-// Based on https://github.com/coinbase/x402/blob/main/go/pkg/coinbasefacilitator/facilitator.go
-// Add support for /supported endpoint
-func CreateCdpAuthHeaders(config *x402types.FacilitatorConfig, cdpAPIKeyID, cdpAPIKeySecret string) (*x402types.FacilitatorConfig, error) {
-	config.CreateAuthHeaders = func() (map[string]map[string]string, error) {
-
-		verifyPath := fmt.Sprintf("%s/verify", config.URL)
-		settlePath := fmt.Sprintf("%s/settle", config.URL)
-		supportedPath := fmt.Sprintf("%s/supported", config.URL)
-
-		verifyToken, err := coinbasefacilitator.CreateAuthHeader(cdpAPIKeyID, cdpAPIKeySecret, config.URL, verifyPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create verify auth header: %w", err)
-		}
-
-		settleToken, err := coinbasefacilitator.CreateAuthHeader(cdpAPIKeyID, cdpAPIKeySecret, config.URL, settlePath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create settle auth header: %w", err)
-		}
-
-		supportedToken, err := coinbasefacilitator.CreateAuthHeader(cdpAPIKeyID, cdpAPIKeySecret, config.URL, supportedPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create supported auth header: %w", err)
-		}
-
-		correlationHeader := coinbasefacilitator.CreateCorrelationHeader()
-
-		return map[string]map[string]string{
-			"verify":    {"Authorization": verifyToken, "Correlation-Context": correlationHeader},
-			"settle":    {"Authorization": settleToken, "Correlation-Context": correlationHeader},
-			"supported": {"Authorization": supportedToken, "Correlation-Context": correlationHeader},
-		}, nil
-	}
-	return config, nil
 }
