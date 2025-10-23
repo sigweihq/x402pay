@@ -862,7 +862,7 @@ func TestProcessTransfertWithCallback(t *testing.T) {
 		resourceURL := "https://example.com/api/resource"
 
 		// Execute test
-		settleResp, err := ProcessTransfertWithCallback(
+		settleResp, err := ProcessTransferWithCallback(
 			paymentPayload,
 			resourceURL,
 			constants.USDCAddressBase,
@@ -930,7 +930,7 @@ func TestProcessTransfertWithCallback(t *testing.T) {
 		)
 
 		// Execute test
-		settleResp, err := ProcessTransfertWithCallback(
+		settleResp, err := ProcessTransferWithCallback(
 			paymentPayload,
 			"https://example.com/api/resource",
 			constants.USDCAddressBase,

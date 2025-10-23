@@ -360,10 +360,10 @@ func GetSupportedNetworks() []string {
 }
 
 func ProcessTransfer(paymentPayload *x402types.PaymentPayload, resourceURL, asset string) (*x402types.SettleResponse, error) {
-	return ProcessTransfertWithCallback(paymentPayload, resourceURL, asset, nil)
+	return ProcessTransferWithCallback(paymentPayload, resourceURL, asset, nil)
 }
 
-func ProcessTransfertWithCallback(
+func ProcessTransferWithCallback(
 	paymentPayload *x402types.PaymentPayload,
 	resourceURL string,
 	asset string,
