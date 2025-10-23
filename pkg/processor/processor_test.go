@@ -802,14 +802,22 @@ func TestProcessTransfertWithCallback(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	t.Run("successful transfer with callback", func(t *testing.T) {
-		callbackCalled := false
+		verifiedCallbackCalled := false
+		settledCallbackCalled := false
 		var capturedPayload *x402types.PaymentPayload
 		var capturedRequirements *x402types.PaymentRequirements
+		var capturedSettleResponse *x402types.SettleResponse
 
 		onVerified := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements) error {
-			callbackCalled = true
+			verifiedCallbackCalled = true
 			capturedPayload = payload
 			capturedRequirements = requirements
+			return nil
+		}
+
+		onSettled := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements, settleResp *x402types.SettleResponse) error {
+			settledCallbackCalled = true
+			capturedSettleResponse = settleResp
 			return nil
 		}
 
@@ -867,15 +875,23 @@ func TestProcessTransfertWithCallback(t *testing.T) {
 			resourceURL,
 			constants.USDCAddressBase,
 			onVerified,
+			onSettled,
 		)
 
 		// Verify results
 		assert.NoError(t, err)
 		assert.NotNil(t, settleResp)
 		assert.True(t, settleResp.Success)
-		assert.True(t, callbackCalled, "callback should have been called")
+		assert.True(t, verifiedCallbackCalled, "onVerified callback should have been called")
+		assert.True(t, settledCallbackCalled, "onSettled callback should have been called")
 		assert.NotNil(t, capturedPayload)
 		assert.NotNil(t, capturedRequirements)
+		assert.NotNil(t, capturedSettleResponse)
+
+		// Verify SettleResponse was captured correctly
+		assert.True(t, capturedSettleResponse.Success)
+		assert.Equal(t, "0xtxhash123", capturedSettleResponse.Transaction)
+		assert.Equal(t, constants.NetworkBase, capturedSettleResponse.Network)
 
 		// Verify PaymentRequirements was constructed correctly
 		assert.Equal(t, "exact", capturedRequirements.Scheme)
@@ -887,9 +903,13 @@ func TestProcessTransfertWithCallback(t *testing.T) {
 		assert.Contains(t, capturedRequirements.Description, resourceURL)
 	})
 
-	t.Run("error when callback fails", func(t *testing.T) {
+	t.Run("error when onVerified callback fails", func(t *testing.T) {
 		onVerified := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements) error {
 			return assert.AnError
+		}
+
+		onSettled := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements, settleResp *x402types.SettleResponse) error {
+			return nil
 		}
 
 		// Create mock facilitator server
@@ -935,12 +955,85 @@ func TestProcessTransfertWithCallback(t *testing.T) {
 			"https://example.com/api/resource",
 			constants.USDCAddressBase,
 			onVerified,
+			onSettled,
 		)
 
 		// Verify error
 		assert.Error(t, err)
 		assert.Nil(t, settleResp)
 		assert.Contains(t, err.Error(), "verification callback failed")
+	})
+
+	t.Run("error when onSettled callback fails", func(t *testing.T) {
+		onVerified := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements) error {
+			return nil
+		}
+
+		onSettled := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements, settleResp *x402types.SettleResponse) error {
+			return assert.AnError
+		}
+
+		// Create mock facilitator server
+		handlers := map[string]http.HandlerFunc{
+			"/supported": func(w http.ResponseWriter, r *http.Request) {
+				response := map[string]any{
+					"kinds": []map[string]string{
+						{"scheme": "exact", "network": constants.NetworkBase},
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/verify": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.VerifyResponse{
+					IsValid: true,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/settle": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.SettleResponse{
+					Success:     true,
+					Transaction: "0xtxhash123",
+					Network:     constants.NetworkBase,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+		}
+		server := mockFacilitatorServerWithHandlers(handlers)
+		defer server.Close()
+
+		// Reset and initialize processor
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		// Create test payment payload
+		paymentPayload := createTestPaymentPayload(
+			constants.NetworkBase,
+			constants.USDCAddressBase,
+			"1000000",
+		)
+
+		// Execute test
+		settleResp, err := ProcessTransferWithCallback(
+			paymentPayload,
+			"https://example.com/api/resource",
+			constants.USDCAddressBase,
+			onVerified,
+			onSettled,
+		)
+
+		// Verify error - settlement succeeded but callback failed
+		assert.Error(t, err)
+		assert.NotNil(t, settleResp, "settle response should be returned even when callback fails")
+		assert.True(t, settleResp.Success, "settlement itself should have succeeded")
+		assert.Equal(t, "0xtxhash123", settleResp.Transaction)
+		assert.Contains(t, err.Error(), "settlement callback failed")
 	})
 }
 

@@ -212,7 +212,7 @@ func ProcessPayment(
 	paymentRequirements *x402types.PaymentRequirements,
 	confirm bool,
 ) (*x402types.SettleResponse, error) {
-	return ProcessPaymentWithCallback(paymentPayload, paymentRequirements, confirm, nil)
+	return ProcessPaymentWithCallback(paymentPayload, paymentRequirements, confirm, nil, nil)
 }
 
 // ProcessPaymentWithCallback verifies and settles a payment with an optional verification callback
@@ -221,6 +221,7 @@ func ProcessPaymentWithCallback(
 	paymentRequirements *x402types.PaymentRequirements,
 	confirm bool,
 	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
+	onSettled func(*x402types.PaymentPayload, *x402types.PaymentRequirements, *x402types.SettleResponse) error,
 ) (*x402types.SettleResponse, error) {
 	processor := getProcessor(paymentPayload.Network)
 	if processor == nil {
@@ -248,6 +249,13 @@ func ProcessPaymentWithCallback(
 					return nil, verifyErr
 				}
 			}
+
+			if onSettled != nil {
+				if err := onSettled(paymentPayload, paymentRequirements, settleResp); err != nil {
+					return settleResp, fmt.Errorf("settlement callback failed: %w", err)
+				}
+			}
+
 			return settleResp, nil
 		}
 
@@ -360,7 +368,7 @@ func GetSupportedNetworks() []string {
 }
 
 func ProcessTransfer(paymentPayload *x402types.PaymentPayload, resourceURL, asset string) (*x402types.SettleResponse, error) {
-	return ProcessTransferWithCallback(paymentPayload, resourceURL, asset, nil)
+	return ProcessTransferWithCallback(paymentPayload, resourceURL, asset, nil, nil)
 }
 
 func ProcessTransferWithCallback(
@@ -368,6 +376,7 @@ func ProcessTransferWithCallback(
 	resourceURL string,
 	asset string,
 	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
+	onSettled func(*x402types.PaymentPayload, *x402types.PaymentRequirements, *x402types.SettleResponse) error,
 ) (*x402types.SettleResponse, error) {
 	assetLower := strings.ToLower(asset)
 
@@ -390,5 +399,5 @@ func ProcessTransferWithCallback(
 		}
 	}
 
-	return ProcessPaymentWithCallback(paymentPayload, paymentRequirements, false, onVerified)
+	return ProcessPaymentWithCallback(paymentPayload, paymentRequirements, false, onVerified, onSettled)
 }
