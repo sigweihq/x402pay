@@ -8,11 +8,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/sigweihq/x402pay/pkg/constants"
-
 	"github.com/coinbase/x402/go/pkg/coinbasefacilitator"
 	"github.com/coinbase/x402/go/pkg/facilitatorclient"
 	x402types "github.com/coinbase/x402/go/pkg/types"
+	"github.com/sigweihq/x402pay/pkg/constants"
+	"github.com/sigweihq/x402pay/pkg/utils"
 )
 
 var (
@@ -378,25 +378,9 @@ func ProcessTransferWithCallback(
 	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
 	onSettled func(*x402types.PaymentPayload, *x402types.PaymentRequirements, *x402types.SettleResponse) error,
 ) (*x402types.SettleResponse, error) {
-	assetLower := strings.ToLower(asset)
-
-	paymentRequirements := &x402types.PaymentRequirements{
-		Scheme:            paymentPayload.Scheme,
-		Network:           paymentPayload.Network,
-		MaxAmountRequired: paymentPayload.Payload.Authorization.Value,
-		Resource:          resourceURL,
-		Description:       fmt.Sprintf("Payment for POST %s", resourceURL),
-		MimeType:          "application/json",
-		PayTo:             paymentPayload.Payload.Authorization.To,
-		MaxTimeoutSeconds: 60,
-		Asset:             asset,
-		Extra:             nil,
-	}
-
-	if assetLower == strings.ToLower(constants.USDCAddressBase) || assetLower == strings.ToLower(constants.USDCAddressBaseSepolia) {
-		if err := paymentRequirements.SetUSDCInfo(paymentPayload.Network == constants.NetworkBaseSepolia); err != nil {
-			return nil, fmt.Errorf("failed to set USDC info: %w", err)
-		}
+	paymentRequirements, err := utils.DerivePaymentRequirements(paymentPayload, resourceURL, asset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive payment requirements: %w", err)
 	}
 
 	return ProcessPaymentWithCallback(paymentPayload, paymentRequirements, false, onVerified, onSettled)

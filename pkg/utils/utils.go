@@ -153,3 +153,32 @@ func CreatePaymentPayload(privateKeyHex, toAddress, network string, value uint64
 
 	return paymentPayload, nil
 }
+
+func DerivePaymentRequirements(
+	paymentPayload *x402types.PaymentPayload,
+	resourceURL string,
+	asset string,
+) (*x402types.PaymentRequirements, error) {
+	assetLower := strings.ToLower(asset)
+
+	paymentRequirements := &x402types.PaymentRequirements{
+		Scheme:            paymentPayload.Scheme,
+		Network:           paymentPayload.Network,
+		MaxAmountRequired: paymentPayload.Payload.Authorization.Value,
+		Resource:          resourceURL,
+		Description:       fmt.Sprintf("Payment for POST %s", resourceURL),
+		MimeType:          "application/json",
+		PayTo:             paymentPayload.Payload.Authorization.To,
+		MaxTimeoutSeconds: 60,
+		Asset:             asset,
+		Extra:             nil,
+	}
+
+	if assetLower == strings.ToLower(constants.USDCAddressBase) || assetLower == strings.ToLower(constants.USDCAddressBaseSepolia) {
+		if err := paymentRequirements.SetUSDCInfo(paymentPayload.Network == constants.NetworkBaseSepolia); err != nil {
+			return nil, fmt.Errorf("failed to set USDC info: %w", err)
+		}
+	}
+
+	return paymentRequirements, nil
+}
