@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
+	x402types "github.com/coinbase/x402/go/pkg/types"
 	"github.com/sigweihq/x402pay/pkg/constants"
 	"github.com/stretchr/testify/assert"
 )
@@ -366,4 +368,583 @@ type MockError struct {
 
 func (e *MockError) Error() string {
 	return e.message
+}
+
+// mockFacilitatorServerWithHandlers creates a test HTTP server with custom handlers
+func mockFacilitatorServerWithHandlers(handlers map[string]http.HandlerFunc) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler, ok := handlers[r.URL.Path]
+		if ok {
+			handler(w, r)
+		} else {
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+// createTestPaymentPayload creates a test PaymentPayload for testing
+func createTestPaymentPayload(network, asset, value string) *x402types.PaymentPayload {
+	return &x402types.PaymentPayload{
+		X402Version: 1,
+		Scheme:      "exact",
+		Network:     network,
+		Payload: &x402types.ExactEvmPayload{
+			Signature: "0xtest_signature",
+			Authorization: &x402types.ExactEvmPayloadAuthorization{
+				From:        "0xFromAddress",
+				To:          asset,
+				Value:       value,
+				ValidAfter:  "0",
+				ValidBefore: "999999999999",
+				Nonce:       "1",
+			},
+		},
+	}
+}
+
+func TestProcessTransfer(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	t.Run("successful transfer with USDC on Base", func(t *testing.T) {
+		// Create mock facilitator server
+		handlers := map[string]http.HandlerFunc{
+			"/supported": func(w http.ResponseWriter, r *http.Request) {
+				response := map[string]any{
+					"kinds": []map[string]string{
+						{"scheme": "exact", "network": constants.NetworkBase},
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/verify": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.VerifyResponse{
+					IsValid: true,
+					Payer:   stringPtr("0xFromAddress"),
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/settle": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.SettleResponse{
+					Success:     true,
+					Transaction: "0xtxhash123",
+					Network:     constants.NetworkBase,
+					Payer:       stringPtr("0xFromAddress"),
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+		}
+		server := mockFacilitatorServerWithHandlers(handlers)
+		defer server.Close()
+
+		// Reset and initialize processor
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		// Create test payment payload
+		paymentPayload := createTestPaymentPayload(
+			constants.NetworkBase,
+			constants.USDCAddressBase,
+			"1000000", // 1 USDC (6 decimals)
+		)
+
+		// Execute test
+		settleResp, err := ProcessTransfer(
+			paymentPayload,
+			"https://example.com/api/resource",
+			constants.USDCAddressBase,
+		)
+
+		// Verify results
+		assert.NoError(t, err)
+		assert.NotNil(t, settleResp)
+		assert.True(t, settleResp.Success)
+		assert.Equal(t, "0xtxhash123", settleResp.Transaction)
+		assert.Equal(t, constants.NetworkBase, settleResp.Network)
+	})
+
+	t.Run("successful transfer with USDC on Base Sepolia", func(t *testing.T) {
+		// Create mock facilitator server
+		handlers := map[string]http.HandlerFunc{
+			"/supported": func(w http.ResponseWriter, r *http.Request) {
+				response := map[string]any{
+					"kinds": []map[string]string{
+						{"scheme": "exact", "network": constants.NetworkBaseSepolia},
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/verify": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.VerifyResponse{
+					IsValid: true,
+					Payer:   stringPtr("0xFromAddress"),
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/settle": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.SettleResponse{
+					Success:     true,
+					Transaction: "0xtxhash456",
+					Network:     constants.NetworkBaseSepolia,
+					Payer:       stringPtr("0xFromAddress"),
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+		}
+		server := mockFacilitatorServerWithHandlers(handlers)
+		defer server.Close()
+
+		// Reset and initialize processor
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		// Create test payment payload
+		paymentPayload := createTestPaymentPayload(
+			constants.NetworkBaseSepolia,
+			constants.USDCAddressBaseSepolia,
+			"5000000", // 5 USDC (6 decimals)
+		)
+
+		// Execute test
+		settleResp, err := ProcessTransfer(
+			paymentPayload,
+			"https://example.com/api/resource",
+			constants.USDCAddressBaseSepolia,
+		)
+
+		// Verify results
+		assert.NoError(t, err)
+		assert.NotNil(t, settleResp)
+		assert.True(t, settleResp.Success)
+		assert.Equal(t, "0xtxhash456", settleResp.Transaction)
+		assert.Equal(t, constants.NetworkBaseSepolia, settleResp.Network)
+	})
+
+	t.Run("successful transfer with USDC case-insensitive matching", func(t *testing.T) {
+		// Create mock facilitator server
+		handlers := map[string]http.HandlerFunc{
+			"/supported": func(w http.ResponseWriter, r *http.Request) {
+				response := map[string]any{
+					"kinds": []map[string]string{
+						{"scheme": "exact", "network": constants.NetworkBase},
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/verify": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.VerifyResponse{
+					IsValid: true,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/settle": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.SettleResponse{
+					Success:     true,
+					Transaction: "0xtxhash789",
+					Network:     constants.NetworkBase,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+		}
+		server := mockFacilitatorServerWithHandlers(handlers)
+		defer server.Close()
+
+		// Reset and initialize processor
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		// Test with lowercase USDC address
+		paymentPayload := createTestPaymentPayload(
+			constants.NetworkBase,
+			constants.USDCAddressBase,
+			"1000000",
+		)
+
+		// Execute test with lowercase asset address
+		settleResp, err := ProcessTransfer(
+			paymentPayload,
+			"https://example.com/api/resource",
+			strings.ToLower(constants.USDCAddressBase),
+		)
+
+		// Verify results
+		assert.NoError(t, err)
+		assert.NotNil(t, settleResp)
+		assert.True(t, settleResp.Success)
+	})
+
+	t.Run("successful transfer with non-USDC asset", func(t *testing.T) {
+		// Create mock facilitator server
+		handlers := map[string]http.HandlerFunc{
+			"/supported": func(w http.ResponseWriter, r *http.Request) {
+				response := map[string]any{
+					"kinds": []map[string]string{
+						{"scheme": "exact", "network": constants.NetworkBase},
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/verify": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.VerifyResponse{
+					IsValid: true,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/settle": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.SettleResponse{
+					Success:     true,
+					Transaction: "0xtxhashABC",
+					Network:     constants.NetworkBase,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+		}
+		server := mockFacilitatorServerWithHandlers(handlers)
+		defer server.Close()
+
+		// Reset and initialize processor
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		// Create test payment payload with custom ERC20 token
+		customToken := "0x1234567890123456789012345678901234567890"
+		paymentPayload := createTestPaymentPayload(
+			constants.NetworkBase,
+			customToken,
+			"1000000000000000000", // 1 token (18 decimals)
+		)
+
+		// Execute test
+		settleResp, err := ProcessTransfer(
+			paymentPayload,
+			"https://example.com/api/resource",
+			customToken,
+		)
+
+		// Verify results
+		assert.NoError(t, err)
+		assert.NotNil(t, settleResp)
+		assert.True(t, settleResp.Success)
+	})
+
+	t.Run("error when no processor configured for network", func(t *testing.T) {
+		// Reset processor map to empty state
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{},
+		}
+		InitProcessorMap(config, logger)
+
+		// Create test payment payload
+		paymentPayload := createTestPaymentPayload(
+			constants.NetworkBase,
+			constants.USDCAddressBase,
+			"1000000",
+		)
+
+		// Execute test
+		settleResp, err := ProcessTransfer(
+			paymentPayload,
+			"https://example.com/api/resource",
+			constants.USDCAddressBase,
+		)
+
+		// Verify error
+		assert.Error(t, err)
+		assert.Nil(t, settleResp)
+		assert.Contains(t, err.Error(), "no processor configured for network")
+	})
+
+	t.Run("error when verification fails", func(t *testing.T) {
+		// Create mock facilitator server that fails verification
+		handlers := map[string]http.HandlerFunc{
+			"/supported": func(w http.ResponseWriter, r *http.Request) {
+				response := map[string]any{
+					"kinds": []map[string]string{
+						{"scheme": "exact", "network": constants.NetworkBase},
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/verify": func(w http.ResponseWriter, r *http.Request) {
+				invalidReason := "insufficient funds"
+				response := x402types.VerifyResponse{
+					IsValid:       false,
+					InvalidReason: &invalidReason,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+		}
+		server := mockFacilitatorServerWithHandlers(handlers)
+		defer server.Close()
+
+		// Reset and initialize processor
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		// Create test payment payload
+		paymentPayload := createTestPaymentPayload(
+			constants.NetworkBase,
+			constants.USDCAddressBase,
+			"1000000",
+		)
+
+		// Execute test
+		settleResp, err := ProcessTransfer(
+			paymentPayload,
+			"https://example.com/api/resource",
+			constants.USDCAddressBase,
+		)
+
+		// Verify error
+		assert.Error(t, err)
+		assert.Nil(t, settleResp)
+		assert.Contains(t, err.Error(), "insufficient funds")
+	})
+
+	t.Run("error when settlement fails", func(t *testing.T) {
+		// Create mock facilitator server that fails settlement
+		handlers := map[string]http.HandlerFunc{
+			"/supported": func(w http.ResponseWriter, r *http.Request) {
+				response := map[string]any{
+					"kinds": []map[string]string{
+						{"scheme": "exact", "network": constants.NetworkBase},
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/verify": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.VerifyResponse{
+					IsValid: true,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/settle": func(w http.ResponseWriter, r *http.Request) {
+				errorReason := "settlement failed: network error"
+				response := x402types.SettleResponse{
+					Success:     false,
+					ErrorReason: &errorReason,
+					Network:     constants.NetworkBase,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+		}
+		server := mockFacilitatorServerWithHandlers(handlers)
+		defer server.Close()
+
+		// Reset and initialize processor
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		// Create test payment payload
+		paymentPayload := createTestPaymentPayload(
+			constants.NetworkBase,
+			constants.USDCAddressBase,
+			"1000000",
+		)
+
+		// Execute test
+		settleResp, err := ProcessTransfer(
+			paymentPayload,
+			"https://example.com/api/resource",
+			constants.USDCAddressBase,
+		)
+
+		// Verify error
+		assert.Error(t, err)
+		assert.Nil(t, settleResp)
+		assert.Contains(t, err.Error(), "settlement failed")
+	})
+}
+
+func TestProcessTransfertWithCallback(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	t.Run("successful transfer with callback", func(t *testing.T) {
+		callbackCalled := false
+		var capturedPayload *x402types.PaymentPayload
+		var capturedRequirements *x402types.PaymentRequirements
+
+		onVerified := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements) error {
+			callbackCalled = true
+			capturedPayload = payload
+			capturedRequirements = requirements
+			return nil
+		}
+
+		// Create mock facilitator server
+		handlers := map[string]http.HandlerFunc{
+			"/supported": func(w http.ResponseWriter, r *http.Request) {
+				response := map[string]any{
+					"kinds": []map[string]string{
+						{"scheme": "exact", "network": constants.NetworkBase},
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/verify": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.VerifyResponse{
+					IsValid: true,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/settle": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.SettleResponse{
+					Success:     true,
+					Transaction: "0xtxhash123",
+					Network:     constants.NetworkBase,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+		}
+		server := mockFacilitatorServerWithHandlers(handlers)
+		defer server.Close()
+
+		// Reset and initialize processor
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		// Create test payment payload
+		paymentPayload := createTestPaymentPayload(
+			constants.NetworkBase,
+			constants.USDCAddressBase,
+			"1000000",
+		)
+
+		resourceURL := "https://example.com/api/resource"
+
+		// Execute test
+		settleResp, err := ProcessTransfertWithCallback(
+			paymentPayload,
+			resourceURL,
+			constants.USDCAddressBase,
+			onVerified,
+		)
+
+		// Verify results
+		assert.NoError(t, err)
+		assert.NotNil(t, settleResp)
+		assert.True(t, settleResp.Success)
+		assert.True(t, callbackCalled, "callback should have been called")
+		assert.NotNil(t, capturedPayload)
+		assert.NotNil(t, capturedRequirements)
+
+		// Verify PaymentRequirements was constructed correctly
+		assert.Equal(t, "exact", capturedRequirements.Scheme)
+		assert.Equal(t, constants.NetworkBase, capturedRequirements.Network)
+		assert.Equal(t, "1000000", capturedRequirements.MaxAmountRequired)
+		assert.Equal(t, resourceURL, capturedRequirements.Resource)
+		assert.Equal(t, constants.USDCAddressBase, capturedRequirements.PayTo)
+		assert.Equal(t, constants.USDCAddressBase, capturedRequirements.Asset)
+		assert.Contains(t, capturedRequirements.Description, resourceURL)
+	})
+
+	t.Run("error when callback fails", func(t *testing.T) {
+		onVerified := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements) error {
+			return assert.AnError
+		}
+
+		// Create mock facilitator server
+		handlers := map[string]http.HandlerFunc{
+			"/supported": func(w http.ResponseWriter, r *http.Request) {
+				response := map[string]any{
+					"kinds": []map[string]string{
+						{"scheme": "exact", "network": constants.NetworkBase},
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+			"/verify": func(w http.ResponseWriter, r *http.Request) {
+				response := x402types.VerifyResponse{
+					IsValid: true,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(response)
+			},
+		}
+		server := mockFacilitatorServerWithHandlers(handlers)
+		defer server.Close()
+
+		// Reset and initialize processor
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		// Create test payment payload
+		paymentPayload := createTestPaymentPayload(
+			constants.NetworkBase,
+			constants.USDCAddressBase,
+			"1000000",
+		)
+
+		// Execute test
+		settleResp, err := ProcessTransfertWithCallback(
+			paymentPayload,
+			"https://example.com/api/resource",
+			constants.USDCAddressBase,
+			onVerified,
+		)
+
+		// Verify error
+		assert.Error(t, err)
+		assert.Nil(t, settleResp)
+		assert.Contains(t, err.Error(), "verification callback failed")
+	})
+}
+
+// Helper function to create string pointers
+func stringPtr(s string) *string {
+	return &s
 }

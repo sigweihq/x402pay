@@ -358,3 +358,37 @@ func GetSupportedNetworks() []string {
 	})
 	return keys
 }
+
+func ProcessTransfer(paymentPayload *x402types.PaymentPayload, resourceURL, asset string) (*x402types.SettleResponse, error) {
+	return ProcessTransfertWithCallback(paymentPayload, resourceURL, asset, nil)
+}
+
+func ProcessTransfertWithCallback(
+	paymentPayload *x402types.PaymentPayload,
+	resourceURL string,
+	asset string,
+	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
+) (*x402types.SettleResponse, error) {
+	assetLower := strings.ToLower(asset)
+
+	paymentRequirements := &x402types.PaymentRequirements{
+		Scheme:            paymentPayload.Scheme,
+		Network:           paymentPayload.Network,
+		MaxAmountRequired: paymentPayload.Payload.Authorization.Value,
+		Resource:          resourceURL,
+		Description:       fmt.Sprintf("Payment for POST %s", resourceURL),
+		MimeType:          "application/json",
+		PayTo:             paymentPayload.Payload.Authorization.To,
+		MaxTimeoutSeconds: 60,
+		Asset:             asset,
+		Extra:             nil,
+	}
+
+	if assetLower == strings.ToLower(constants.USDCAddressBase) || assetLower == strings.ToLower(constants.USDCAddressBaseSepolia) {
+		if err := paymentRequirements.SetUSDCInfo(paymentPayload.Network == constants.NetworkBaseSepolia); err != nil {
+			return nil, fmt.Errorf("failed to set USDC info: %w", err)
+		}
+	}
+
+	return ProcessPaymentWithCallback(paymentPayload, paymentRequirements, false, onVerified)
+}

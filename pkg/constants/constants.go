@@ -24,9 +24,14 @@ const (
 	NetworkSolanaDevnet = "solana-devnet"
 )
 
+const (
+	USDCAddressBase        = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+	USDCAddressBaseSepolia = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+)
+
 var NetworkToUSDCAddress = map[string]string{
-	NetworkBase:        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-	NetworkBaseSepolia: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+	NetworkBase:        USDCAddressBase,
+	NetworkBaseSepolia: USDCAddressBaseSepolia,
 }
 
 // mapping from network name to CAIP-2 chain ID
