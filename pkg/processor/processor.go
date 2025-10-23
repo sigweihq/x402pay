@@ -91,7 +91,7 @@ func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret str
 	for _, url := range urls {
 		config := &x402types.FacilitatorConfig{URL: url}
 		client := makeClient(config, httpClient)
-		supportedNetworks := Supported(client)
+		supportedNetworks := DiscoverSupported(client)
 		for _, network := range supportedNetworks {
 			networkToClients[network] = append(networkToClients[network], client)
 		}
@@ -320,7 +320,7 @@ func VerifyPaymentWithCallback(
 	return nil, fmt.Errorf("all facilitators failed, last error: %w", lastErr)
 }
 
-func Supported(c *facilitatorclient.FacilitatorClient) []string {
+func DiscoverSupported(c *facilitatorclient.FacilitatorClient) []string {
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/supported", c.URL), nil)
 	if err != nil {
 		return []string{}
@@ -347,4 +347,14 @@ func Supported(c *facilitatorclient.FacilitatorClient) []string {
 	}
 
 	return networks
+}
+
+func GetSupportedNetworks() []string {
+	// return keys of processorMap
+	keys := make([]string, 0)
+	processorMap.Range(func(key, _ interface{}) bool {
+		keys = append(keys, key.(string))
+		return true
+	})
+	return keys
 }

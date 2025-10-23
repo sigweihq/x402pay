@@ -252,6 +252,113 @@ func TestProcessorFacilitatorConfigs(t *testing.T) {
 	})
 }
 
+func TestGetSupportedNetworks(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	t.Run("no networks configured", func(t *testing.T) {
+		// Reset state for testing
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{},
+		}
+		InitProcessorMap(config, logger)
+
+		networks := GetSupportedNetworks()
+		assert.Empty(t, networks)
+	})
+
+	t.Run("single network configured", func(t *testing.T) {
+		// Create mock facilitator server supporting only base
+		server := mockFacilitatorServer([]string{constants.NetworkBase})
+		defer server.Close()
+
+		// Reset state for testing
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		networks := GetSupportedNetworks()
+		assert.Len(t, networks, 1)
+		assert.Contains(t, networks, constants.NetworkBase)
+	})
+
+	t.Run("multiple networks configured", func(t *testing.T) {
+		// Create mock facilitator server supporting multiple networks
+		server := mockFacilitatorServer([]string{
+			constants.NetworkBase,
+			constants.NetworkBaseSepolia,
+		})
+		defer server.Close()
+
+		// Reset state for testing
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		networks := GetSupportedNetworks()
+		assert.Len(t, networks, 2)
+		assert.Contains(t, networks, constants.NetworkBase)
+		assert.Contains(t, networks, constants.NetworkBaseSepolia)
+	})
+
+	t.Run("multiple facilitators with different network support", func(t *testing.T) {
+		// Create mock facilitator servers with different network support
+		server1 := mockFacilitatorServer([]string{constants.NetworkBase})
+		defer server1.Close()
+
+		server2 := mockFacilitatorServer([]string{constants.NetworkBaseSepolia})
+		defer server2.Close()
+
+		// Reset state for testing
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server1.URL, server2.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		networks := GetSupportedNetworks()
+		assert.Len(t, networks, 2)
+		assert.Contains(t, networks, constants.NetworkBase)
+		assert.Contains(t, networks, constants.NetworkBaseSepolia)
+	})
+
+	t.Run("overlapping network support from multiple facilitators", func(t *testing.T) {
+		// Both facilitators support the same networks
+		server1 := mockFacilitatorServer([]string{constants.NetworkBase, constants.NetworkBaseSepolia})
+		defer server1.Close()
+
+		server2 := mockFacilitatorServer([]string{constants.NetworkBase})
+		defer server2.Close()
+
+		// Reset state for testing
+		processorMap = sync.Map{}
+		processorMapOnce = sync.Once{}
+
+		config := &ProcessorConfig{
+			FacilitatorURLs: []string{server1.URL, server2.URL},
+		}
+		InitProcessorMap(config, logger)
+
+		networks := GetSupportedNetworks()
+		// Should still return unique networks (no duplicates)
+		assert.Len(t, networks, 2)
+		assert.Contains(t, networks, constants.NetworkBase)
+		assert.Contains(t, networks, constants.NetworkBaseSepolia)
+	})
+}
+
 // MockError is a simple error type for testing
 type MockError struct {
 	message string
