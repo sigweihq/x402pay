@@ -210,16 +210,16 @@ func (p *PaymentProcessor) tryFacilitatorWithCallback(
 func ProcessPayment(
 	paymentPayload *x402types.PaymentPayload,
 	paymentRequirements *x402types.PaymentRequirements,
-	skipVerification bool,
+	confirm bool,
 ) (*x402types.SettleResponse, error) {
-	return ProcessPaymentWithCallback(paymentPayload, paymentRequirements, skipVerification, nil)
+	return ProcessPaymentWithCallback(paymentPayload, paymentRequirements, confirm, nil)
 }
 
 // ProcessPaymentWithCallback verifies and settles a payment with an optional verification callback
 func ProcessPaymentWithCallback(
 	paymentPayload *x402types.PaymentPayload,
 	paymentRequirements *x402types.PaymentRequirements,
-	skipVerification bool,
+	confirm bool,
 	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
 ) (*x402types.SettleResponse, error) {
 	processor := getProcessor(paymentPayload.Network)
@@ -242,7 +242,7 @@ func ProcessPaymentWithCallback(
 		settleResp, err := processor.tryFacilitatorWithCallback(client, paymentPayload, paymentRequirements, onVerified)
 		if err == nil {
 			processor.logger.Info("Facilitator succeeded", "url", client.URL)
-			if !skipVerification {
+			if confirm {
 				if verifyErr := VerifySettledTransaction(settleResp, paymentPayload); verifyErr != nil {
 					processor.logger.Error("Transaction verification failed", "error", verifyErr)
 					return nil, verifyErr

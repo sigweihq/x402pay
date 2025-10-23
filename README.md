@@ -54,7 +54,7 @@ func main() {
     settleResp, err := ProcessPayment(
         paymentPayload,      // *x402types.PaymentPayload (contains Network field)
         paymentRequirements, // *x402types.PaymentRequirements
-        false,               // skipVerification
+        true,                // confirm on the blockchain
     )
     if err != nil {
         logger.Error("Payment failed", "error", err)
@@ -138,7 +138,7 @@ func InitProcessorMap(config *ProcessorConfig, logger *slog.Logger)
 func ProcessPayment(
     paymentPayload *x402types.PaymentPayload,
     paymentRequirements *x402types.PaymentRequirements,
-    skipVerification bool,
+    confirm bool,
 ) (*x402types.SettleResponse, error)
 
 // Process payment with verification callback
@@ -146,7 +146,7 @@ func ProcessPayment(
 func ProcessPaymentWithCallback(
     paymentPayload *x402types.PaymentPayload,
     paymentRequirements *x402types.PaymentRequirements,
-    skipVerification bool,
+    confirm bool,
     onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
 ) (*x402types.SettleResponse, error)
 ```
