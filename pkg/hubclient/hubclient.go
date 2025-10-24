@@ -85,7 +85,7 @@ func (c *HubClient) SettleWithOptions(payload *types.PaymentPayload, requirement
 	return &settleResp, nil
 }
 
-// Transfer is a convenience method that calls SettleWithOptions with useDbId=false
+// Transfer is an enpoint for convenient transfers
 func (c *HubClient) Transfer(payload *types.ExactEvmPayload, network string, asset string, confirm bool) (*types.SettleResponse, error) {
 	reqBody := map[string]any{
 		"payload": payload,
@@ -111,7 +111,7 @@ func (c *HubClient) Transfer(payload *types.ExactEvmPayload, network string, ass
 		if err != nil {
 			return nil, fmt.Errorf("failed to create auth headers: %w", err)
 		}
-		if settleHeaders, ok := headers["settle"]; ok {
+		if settleHeaders, ok := headers["transfer"]; ok {
 			for key, value := range settleHeaders {
 				req.Header.Set(key, value)
 			}
