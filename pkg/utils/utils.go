@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
+	"github.com/coinbase/x402/go/pkg/facilitatorclient"
 	x402types "github.com/coinbase/x402/go/pkg/types"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -181,4 +183,21 @@ func DerivePaymentRequirements(
 	}
 
 	return paymentRequirements, nil
+}
+
+func CreateHTTPClientWithTimeouts() *http.Client {
+	return &http.Client{
+		Timeout: constants.FacilitatorTimeout,
+		Transport: &http.Transport{
+			TLSHandshakeTimeout:   constants.TLSHandshakeTimeout,
+			ResponseHeaderTimeout: constants.ResponseHeaderTimeout,
+			ExpectContinueTimeout: constants.ExpectContinueTimeout,
+		},
+	}
+}
+
+func NewFacilitatorClient(config *x402types.FacilitatorConfig, httpClient *http.Client) *facilitatorclient.FacilitatorClient {
+	client := facilitatorclient.NewFacilitatorClient(config)
+	client.HTTPClient = httpClient
+	return client
 }

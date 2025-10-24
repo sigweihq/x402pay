@@ -68,19 +68,12 @@ func getProcessor(network string) *PaymentProcessor {
 func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret string) map[string][]*facilitatorclient.FacilitatorClient {
 	networkToClients := make(map[string][]*facilitatorclient.FacilitatorClient)
 	// Create HTTP client with timeouts once, reused for all clients
-	httpClient := &http.Client{
-		Timeout: constants.FacilitatorTimeout,
-		Transport: &http.Transport{
-			TLSHandshakeTimeout:   constants.TLSHandshakeTimeout,
-			ResponseHeaderTimeout: constants.ResponseHeaderTimeout,
-			ExpectContinueTimeout: constants.ExpectContinueTimeout,
-		},
-	}
+	httpClient := utils.CreateHTTPClientWithTimeouts()
 
 	// If CDP credentials are provided, only use CDP facilitator
 	if cdpAPIKeyID != "" && cdpAPIKeySecret != "" {
 		config := coinbasefacilitator.CreateFacilitatorConfig(cdpAPIKeyID, cdpAPIKeySecret)
-		client := makeClient(config, httpClient)
+		client := utils.NewFacilitatorClient(config, httpClient)
 		supportedNetworks := []string{constants.NetworkBase, constants.NetworkBaseSepolia, constants.NetworkSolana, constants.NetworkSolanaDevnet}
 		for _, network := range supportedNetworks {
 			networkToClients[network] = append(networkToClients[network], client)
@@ -90,7 +83,7 @@ func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret str
 	// Create clients for each provided URL
 	for _, url := range urls {
 		config := &x402types.FacilitatorConfig{URL: url}
-		client := makeClient(config, httpClient)
+		client := utils.NewFacilitatorClient(config, httpClient)
 		supportedNetworks := DiscoverSupported(client)
 		for _, network := range supportedNetworks {
 			networkToClients[network] = append(networkToClients[network], client)
@@ -98,12 +91,6 @@ func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret str
 	}
 
 	return networkToClients
-}
-
-func makeClient(config *x402types.FacilitatorConfig, httpClient *http.Client) *facilitatorclient.FacilitatorClient {
-	client := facilitatorclient.NewFacilitatorClient(config)
-	client.HTTPClient = httpClient
-	return client
 }
 
 // shouldRetryWithNextFacilitator determines if we should try the next facilitator
