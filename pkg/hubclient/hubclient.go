@@ -17,10 +17,23 @@ import (
 // DefaultHubURL is the default URL for the x402 hub service
 const DefaultHubURL = "https://hub.sigwei.com"
 
+// HubClient provides access to x402-hub services
+// It embeds FacilitatorClient for standard x402 protocol endpoints (verify, settle)
+// and adds Auth and History clients for hub-specific features
 type HubClient struct {
 	*facilitatorclient.FacilitatorClient
+
+	// Auth provides wallet-based authentication functionality
+	// Endpoints: /api/v1/auth/message, /api/v1/auth/login, /api/v1/auth/refresh, etc.
+	Auth *AuthClient
+
+	// History provides transaction history queries for authenticated users
+	// Endpoints: /api/v1/history
+	History *HistoryClient
 }
 
+// NewHubClient creates a new hub client with all sub-clients initialized
+// The Auth and History clients share the same HTTP client and base URL
 func NewHubClient(config *types.FacilitatorConfig) *HubClient {
 	if config == nil {
 		config = &types.FacilitatorConfig{
@@ -28,8 +41,16 @@ func NewHubClient(config *types.FacilitatorConfig) *HubClient {
 		}
 	}
 
+	facilitatorClient := facilitatorclient.NewFacilitatorClient(config)
+
+	// Create sub-clients using the same HTTP client and URL
+	authClient := newAuthClient(config.URL, facilitatorClient.HTTPClient)
+	historyClient := newHistoryClient(config.URL, facilitatorClient.HTTPClient, authClient)
+
 	return &HubClient{
-		FacilitatorClient: facilitatorclient.NewFacilitatorClient(config),
+		FacilitatorClient: facilitatorClient,
+		Auth:              authClient,
+		History:           historyClient,
 	}
 }
 
