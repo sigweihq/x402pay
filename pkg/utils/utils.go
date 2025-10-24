@@ -18,7 +18,7 @@ import (
 )
 
 // AuthorizationToTypedData converts an x402 authorization to EIP-712 typed data JSON
-func AuthorizationToTypedData(paymentRequirements *x402types.PaymentRequirements, authorization *x402types.ExactEvmPayloadAuthorization) (string, error) {
+func AuthorizationToTypedData(paymentRequirements *x402types.PaymentRequirements, authorization *x402types.ExactEvmPayloadAuthorization, domainName string) (string, error) {
 	typedData := apitypes.TypedData{
 		Types: apitypes.Types{
 			"EIP712Domain": []apitypes.Type{
@@ -38,7 +38,7 @@ func AuthorizationToTypedData(paymentRequirements *x402types.PaymentRequirements
 		},
 		PrimaryType: "TransferWithAuthorization",
 		Domain: apitypes.TypedDataDomain{
-			Name:              constants.USDCName[paymentRequirements.Network],
+			Name:              domainName,
 			Version:           "2",
 			ChainId:           math.NewHexOrDecimal256(constants.NetworkToChainID[paymentRequirements.Network]),
 			VerifyingContract: strings.ToLower(paymentRequirements.Asset),
@@ -62,18 +62,15 @@ func AuthorizationToTypedData(paymentRequirements *x402types.PaymentRequirements
 }
 
 // CreateSignatureForTransfer creates a signature for the server-side transfer
-func CreateSignatureForTransfer(privateKey *ecdsa.PrivateKey, authorization *x402types.ExactEvmPayloadAuthorization, network string) string {
-	// Use existing constants and utilities
-	usdcAddress := constants.NetworkToUSDCAddress[network]
-
+func CreateSignatureForTransfer(privateKey *ecdsa.PrivateKey, authorization *x402types.ExactEvmPayloadAuthorization, network, asset, domainName string) string {
 	// Create payment requirements - reuse existing structures
 	paymentRequirements := &x402types.PaymentRequirements{
 		Network: network,
-		Asset:   usdcAddress,
+		Asset:   asset,
 	}
 
 	// Use the existing authorizationToTypedData function from transactions package
-	typedDataJSON, err := AuthorizationToTypedData(paymentRequirements, authorization)
+	typedDataJSON, err := AuthorizationToTypedData(paymentRequirements, authorization, domainName)
 	if err != nil {
 		return "0x" + strings.Repeat("0", 130)
 	}
@@ -134,7 +131,7 @@ func ToPaymentPayload(signature, fromAddress, toAddress, network string, value u
 }
 
 // CreatePaymentPayload creates a signed payment payload
-func CreatePaymentPayload(privateKeyHex, toAddress, network string, value uint64, nonce string) (*x402types.PaymentPayload, error) {
+func CreatePaymentPayload(privateKeyHex, toAddress, network, asset, domainName string, value uint64, nonce string) (*x402types.PaymentPayload, error) {
 	// Remove 0x prefix if present
 	privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
 
@@ -147,7 +144,7 @@ func CreatePaymentPayload(privateKeyHex, toAddress, network string, value uint64
 
 	validBefore := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
 	paymentPayload := ToPaymentPayload("", fromAddress, toAddress, network, value, nonce, validBefore)
-	paymentPayload.Payload.Signature = CreateSignatureForTransfer(privateKey, paymentPayload.Payload.Authorization, network)
+	paymentPayload.Payload.Signature = CreateSignatureForTransfer(privateKey, paymentPayload.Payload.Authorization, network, asset, domainName)
 
 	return paymentPayload, nil
 }

@@ -47,8 +47,8 @@ var NetworkToChainID = map[string]int64{
 }
 
 var USDCName = map[string]string{
-	NetworkBase:        "USD Coin",
-	NetworkBaseSepolia: "USDC",
+	USDCAddressBase:        "USD Coin",
+	USDCAddressBaseSepolia: "USDC",
 }
 
 var OfficialRPCEndpoints = map[string][]string{
