@@ -28,10 +28,10 @@ type AuthRequest struct {
 
 // User represents a user in the system
 type User struct {
-	ID            uint64 `json:"id"`
-	WalletAddress string `json:"walletAddress"`
-	CreatedAt     string `json:"createdAt"`
-	UpdatedAt     string `json:"updatedAt"`
+	ID            uint64    `json:"id"`
+	WalletAddress string    `json:"walletAddress"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 // AuthResponse represents the authentication response

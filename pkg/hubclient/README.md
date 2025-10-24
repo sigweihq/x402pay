@@ -318,10 +318,10 @@ type AuthResponse struct {
 }
 
 type User struct {
-    ID            uint64 `json:"id"`
-    WalletAddress string `json:"walletAddress"`
-    CreatedAt     string `json:"createdAt"`
-    UpdatedAt     string `json:"updatedAt"`
+    ID            uint64    `json:"id"`
+	WalletAddress string    `json:"walletAddress"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 type TokenPair struct {
@@ -366,6 +366,123 @@ type TransactionHistoryItem struct {
 - **HTTP client** is thread-safe (from `net/http`)
 - Multiple goroutines can safely share a single `HubClient` instance
 
+## Testing with HubClient
+
+The HubClient significantly simplifies E2E and integration tests by eliminating manual HTTP calls and JSON parsing.
+
+### Before: Manual HTTP Calls (~70 lines)
+
+```go
+func authenticateUser(account *TestAccount) (string, error) {
+    // Manual HTTP call to /api/v1/auth/message
+    client := &http.Client{Timeout: 10 * time.Second}
+    messageUrl := fmt.Sprintf("%s/api/v1/auth/message?walletAddress=%s", baseURL, account.Address)
+    resp, err := client.Get(messageUrl)
+    // ... JSON parsing
+    var messageResponse map[string]interface{}
+    json.NewDecoder(resp.Body).Decode(&messageResponse)
+    message := messageResponse["message"].(string)
+
+    // Sign message
+    signature, _ := account.SignPersonalMessage(t, message)
+
+    // Manual HTTP call to /api/v1/auth/login
+    authBody, _ := json.Marshal(map[string]interface{}{
+        "message": message,
+        "signature": signature,
+    })
+    authResp, _ := client.Post(fmt.Sprintf("%s/api/v1/auth/login", baseURL), ...)
+    // ... more JSON parsing
+    // ... token extraction from body or cookies
+    // ~70 lines total
+}
+
+// Manual history query (~30 lines)
+historyResp, _ := client.DoRequest("GET", "/api/v1/history?limit=10", nil, nil)
+body, _ := io.ReadAll(historyResp.Body)
+var historyResult map[string]interface{}
+json.Unmarshal(body, &historyResult)
+history := historyResult["transactions"].([]interface{})
+for _, tx := range history {
+    txMap := tx.(map[string]interface{})
+    if txMap["transactionHash"] == targetTxHash {
+        // found it
+    }
+}
+```
+
+### After: Using HubClient (~15 lines)
+
+```go
+func authenticateUser(account *TestAccount) (*HubClient, error) {
+    hubClient := hubclient.NewHubClient(&types.FacilitatorConfig{
+        URL: baseURL,
+    })
+
+    msgResp, _ := hubClient.Auth.GetAuthMessage(account.Address)
+    signature, _ := account.SignPersonalMessage(t, msgResp.Message)
+    _, err := hubClient.Auth.Login(msgResp.Message, signature)
+    // Tokens auto-stored in hubClient.Auth
+    return hubClient, err
+}
+
+// Type-safe history query
+history, _ := hubClient.History.GetHistory(&x402paytypes.HistoryParams{
+    Limit: 10,
+})
+for _, tx := range history.Transactions {
+    if tx.TransactionHash != nil && *tx.TransactionHash == targetTxHash {
+        // found it - fully typed!
+    }
+}
+```
+
+### Benefits in Tests
+
+1. **63% less code** - 70 lines → 26 lines for auth
+2. **Type safety** - `map[string]interface{}` → `*TransactionHistoryItem`
+3. **Automatic token management** - No manual extraction or storage
+4. **Better error handling** - Structured errors with context
+5. **Auto token refresh** - Use `GetHistoryWithAutoRefresh()`
+6. **Single source of truth** - All auth/history logic in hubclient
+
+### Complete E2E Test Example
+
+```go
+func TestRealTransfer(t *testing.T) {
+    // Authenticate
+    hubClient := hubclient.NewHubClient(&types.FacilitatorConfig{
+        URL: serverURL,
+    })
+
+    msgResp, err := hubClient.Auth.GetAuthMessage(wallet.Address)
+    require.NoError(t, err)
+
+    signature, err := wallet.SignPersonalMessage(t, msgResp.Message)
+    require.NoError(t, err)
+
+    authResp, err := hubClient.Auth.Login(msgResp.Message, signature)
+    require.NoError(t, err)
+    t.Logf("Authenticated: %s", authResp.User.WalletAddress)
+
+    // Perform transfer...
+    // (transfer logic here)
+
+    // Verify in history with auto-refresh
+    history, err := hubClient.History.GetHistoryWithAutoRefresh(&x402paytypes.HistoryParams{
+        Limit:   10,
+        Network: "base-sepolia",
+    })
+    require.NoError(t, err)
+
+    // Type-safe access
+    assert.GreaterOrEqual(t, len(history.Transactions), 1)
+    foundTx := history.Transactions[0]
+    assert.Equal(t, wallet.Address, foundTx.SignerAddress)
+    assert.Contains(t, []string{"PENDING", "SUCCESS"}, foundTx.Status)
+}
+```
+
 ## Best Practices
 
 1. **Reuse client instances** - Create once, use throughout your application
@@ -373,6 +490,7 @@ type TransactionHistoryItem struct {
 3. **Store tokens securely** - Persist tokens in secure storage between sessions
 4. **Validate parameters** - Check limits and offsets before making requests
 5. **Handle errors properly** - Check for `HTTPError` type for detailed error info
+6. **Use in tests** - Replace manual HTTP calls with hubclient for cleaner, type-safe tests
 
 ## Examples
 

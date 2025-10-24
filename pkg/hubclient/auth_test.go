@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	x402paytypes "github.com/sigweihq/x402pay/pkg/types"
 	"github.com/stretchr/testify/assert"
@@ -247,12 +248,16 @@ func TestAuthClient_GetMe(t *testing.T) {
 		{
 			name:        "successful user info retrieval",
 			accessToken: "valid-token",
-			serverResponse: &x402paytypes.User{
-				ID:            1,
-				WalletAddress: "0x1234567890123456789012345678901234567890",
-				CreatedAt:     "2024-01-01T00:00:00Z",
-				UpdatedAt:     "2024-01-02T00:00:00Z",
-			},
+			serverResponse: func() *x402paytypes.User {
+				createdAt, _ := time.Parse(time.RFC3339, "2024-01-01T00:00:00Z")
+				updatedAt, _ := time.Parse(time.RFC3339, "2024-01-02T00:00:00Z")
+				return &x402paytypes.User{
+					ID:            1,
+					WalletAddress: "0x1234567890123456789012345678901234567890",
+					CreatedAt:     createdAt,
+					UpdatedAt:     updatedAt,
+				}
+			}(),
 			serverStatusCode: http.StatusOK,
 			expectedError:    false,
 		},
