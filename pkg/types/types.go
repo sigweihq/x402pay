@@ -10,8 +10,9 @@ type SupportedResponse struct {
 
 // NetworkKind contains information about a supported scheme/network combination
 type NetworkKind struct {
-	Scheme  string `json:"scheme"`  // Payment scheme (e.g., "exact")
-	Network string `json:"network"` // Network name (e.g., "base", "base-sepolia")
+	X402Version int    `json:"x402Version"`
+	Scheme      string `json:"scheme"`  // Payment scheme (e.g., "exact")
+	Network     string `json:"network"` // Network name (e.g., "base", "base-sepolia")
 }
 
 // MessageResponse represents the auth message response
