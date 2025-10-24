@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/coinbase/x402/go/pkg/facilitatorclient"
 	x402types "github.com/coinbase/x402/go/pkg/types"
@@ -133,7 +134,7 @@ func ToPaymentPayload(signature, fromAddress, toAddress, network string, value u
 }
 
 // CreatePaymentPayload creates a signed payment payload
-func CreatePaymentPayload(privateKeyHex, toAddress, network string, value uint64, nonce string, validBefore string) (*x402types.PaymentPayload, error) {
+func CreatePaymentPayload(privateKeyHex, toAddress, network string, value uint64, nonce string) (*x402types.PaymentPayload, error) {
 	// Remove 0x prefix if present
 	privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
 
@@ -144,6 +145,7 @@ func CreatePaymentPayload(privateKeyHex, toAddress, network string, value uint64
 
 	fromAddress := crypto.PubkeyToAddress(privateKey.PublicKey).Hex()
 
+	validBefore := fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix())
 	paymentPayload := ToPaymentPayload("", fromAddress, toAddress, network, value, nonce, validBefore)
 	paymentPayload.Payload.Signature = CreateSignatureForTransfer(privateKey, paymentPayload.Payload.Authorization, network)
 
