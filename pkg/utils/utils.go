@@ -203,3 +203,14 @@ func WrapExactEvmPayload(payload *x402types.ExactEvmPayload, network string) *x4
 		Payload:     payload,
 	}
 }
+
+func ExtractExtraData(paymentRequirements *x402types.PaymentRequirements) (string, string, error) {
+	// extract "name" from Extra JSON on paymentRequirements
+	var extraData map[string]any
+	if paymentRequirements.Extra != nil {
+		if err := json.Unmarshal(*paymentRequirements.Extra, &extraData); err != nil {
+			return "", "", fmt.Errorf("failed to unmarshal Extra: %w", err)
+		}
+	}
+	return extraData["name"].(string), extraData["version"].(string), nil
+}
