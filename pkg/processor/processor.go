@@ -193,8 +193,6 @@ func (p *PaymentProcessor) tryFacilitatorWithCallback(
 		return nil, fmt.Errorf("payment settlement failed: %w", err)
 	}
 
-	p.logger.Info("Payment settlement response received", "success", settleResp.Success)
-
 	if !settleResp.Success {
 		reason := "unknown"
 		if settleResp.ErrorReason != nil {
