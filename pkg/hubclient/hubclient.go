@@ -9,16 +9,16 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/coinbase/x402/go/pkg/facilitatorclient"
 	"github.com/coinbase/x402/go/pkg/types"
+	x402paytypes "github.com/sigweihq/x402pay/pkg/types"
 )
 
-// DefaultFacilitatorURL is the default URL for the x402 facilitator service
+// DefaultHubURL is the default URL for the x402 hub service
 const DefaultHubURL = "https://hub.sigwei.com"
 
 type HubClient struct {
-	URL               string
-	HTTPClient        *http.Client
-	CreateAuthHeaders func() (map[string]map[string]string, error)
+	*facilitatorclient.FacilitatorClient
 }
 
 func NewHubClient(config *types.FacilitatorConfig) *HubClient {
@@ -28,71 +28,13 @@ func NewHubClient(config *types.FacilitatorConfig) *HubClient {
 		}
 	}
 
-	httpCli := &http.Client{}
-	if config.Timeout != nil {
-		httpCli.Timeout = config.Timeout()
-	}
-
 	return &HubClient{
-		URL:               config.URL,
-		HTTPClient:        httpCli,
-		CreateAuthHeaders: config.CreateAuthHeaders,
+		FacilitatorClient: facilitatorclient.NewFacilitatorClient(config),
 	}
 }
 
-// Verify sends a payment verification request to the facilitator
-func (c *HubClient) Verify(payload *types.PaymentPayload, requirements *types.PaymentRequirements) (*types.VerifyResponse, error) {
-
-	reqBody := map[string]any{
-		"x402Version":         1,
-		"paymentPayload":      payload,
-		"paymentRequirements": requirements,
-	}
-
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request body: %w", err)
-	}
-
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/verify", c.URL), bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	// Add auth headers if available
-	if c.CreateAuthHeaders != nil {
-		headers, err := c.CreateAuthHeaders()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create auth headers: %w", err)
-		}
-		if verifyHeaders, ok := headers["verify"]; ok {
-			for key, value := range verifyHeaders {
-				req.Header.Set(key, value)
-			}
-		}
-	}
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send verify request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to verify payment: %s", resp.Status)
-	}
-
-	var verifyResp types.VerifyResponse
-	if err := json.NewDecoder(resp.Body).Decode(&verifyResp); err != nil {
-		return nil, fmt.Errorf("failed to decode verify response: %w", err)
-	}
-
-	return &verifyResp, nil
-}
-
-// Settle sends a payment settlement request to the facilitator
-func (c *HubClient) Settle(payload *types.PaymentPayload, requirements *types.PaymentRequirements, confirm bool, useDbId bool) (*types.SettleResponse, error) {
+// SettleWithOptions sends a payment settlement request to the hub with additional options
+func (c *HubClient) SettleWithOptions(payload *types.PaymentPayload, requirements *types.PaymentRequirements, confirm bool, useDbId bool) (*types.SettleResponse, error) {
 	reqBody := map[string]any{
 		"x402Version":         1,
 		"paymentPayload":      payload,
@@ -143,6 +85,90 @@ func (c *HubClient) Settle(payload *types.PaymentPayload, requirements *types.Pa
 	return &settleResp, nil
 }
 
-func (c *HubClient) Transfer(payload *types.PaymentPayload, requirements *types.PaymentRequirements, confirm bool) (*types.SettleResponse, error) {
-	return c.Settle(payload, requirements, confirm, false)
+// Transfer is a convenience method that calls SettleWithOptions with useDbId=false
+func (c *HubClient) Transfer(payload *types.ExactEvmPayload, network string, asset string, confirm bool) (*types.SettleResponse, error) {
+	reqBody := map[string]any{
+		"payload": payload,
+		"network": network,
+		"asset":   asset,
+		"confirm": confirm,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/transfer", c.URL), bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Add auth headers if available
+	if c.CreateAuthHeaders != nil {
+		headers, err := c.CreateAuthHeaders()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create auth headers: %w", err)
+		}
+		if settleHeaders, ok := headers["settle"]; ok {
+			for key, value := range settleHeaders {
+				req.Header.Set(key, value)
+			}
+		}
+	}
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send transfer request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to transfer payment: %s", resp.Status)
+	}
+
+	var settleResp types.SettleResponse
+	if err := json.NewDecoder(resp.Body).Decode(&settleResp); err != nil {
+		return nil, fmt.Errorf("failed to decode transfer response: %w", err)
+	}
+
+	return &settleResp, nil
+}
+
+func (c *HubClient) Supported() (*x402paytypes.SupportedResponse, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/supported", c.URL), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Add supported headers if available
+	if c.CreateAuthHeaders != nil {
+		headers, err := c.CreateAuthHeaders()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create auth headers: %w", err)
+		}
+		if supportedHeaders, ok := headers["supported"]; ok {
+			for key, value := range supportedHeaders {
+				req.Header.Set(key, value)
+			}
+		}
+	}
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send supported request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get supported networks: %s", resp.Status)
+	}
+
+	var supportedResp x402paytypes.SupportedResponse
+	if err := json.NewDecoder(resp.Body).Decode(&supportedResp); err != nil {
+		return nil, fmt.Errorf("failed to decode supported response: %w", err)
+	}
+	return &supportedResp, nil
 }

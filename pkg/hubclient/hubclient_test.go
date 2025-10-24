@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/coinbase/x402/go/pkg/types"
+	x402paytypes "github.com/sigweihq/x402pay/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -446,7 +447,7 @@ func TestHubClient_Settle(t *testing.T) {
 			}
 
 			client := NewHubClient(config)
-			resp, err := client.Settle(tt.payload, tt.requirements, tt.confirm, tt.useDbId)
+			resp, err := client.SettleWithOptions(tt.payload, tt.requirements, tt.confirm, tt.useDbId)
 
 			if tt.expectedError {
 				assert.Error(t, err)
@@ -466,8 +467,9 @@ func TestHubClient_Settle(t *testing.T) {
 func TestHubClient_Transfer(t *testing.T) {
 	tests := []struct {
 		name             string
-		payload          *types.PaymentPayload
-		requirements     *types.PaymentRequirements
+		payload          *types.ExactEvmPayload
+		network          string
+		asset            string
 		confirm          bool
 		serverResponse   *types.SettleResponse
 		serverStatusCode int
@@ -475,15 +477,20 @@ func TestHubClient_Transfer(t *testing.T) {
 		validateRequest  func(*testing.T, *http.Request)
 	}{
 		{
-			name: "successful transfer calls settle with useDbId false",
-			payload: &types.PaymentPayload{
-				X402Version: 1,
-				Network:     "base",
+			name: "successful transfer",
+			payload: &types.ExactEvmPayload{
+				Signature: "0x1234567890abcdef",
+				Authorization: &types.ExactEvmPayloadAuthorization{
+					From:        "0xSender",
+					To:          "0xRecipient",
+					Value:       "1000000",
+					ValidAfter:  "0",
+					ValidBefore: "9999999999",
+					Nonce:       "1",
+				},
 			},
-			requirements: &types.PaymentRequirements{
-				Network: "base",
-				Asset:   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-			},
+			network: "base",
+			asset:   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
 			confirm: true,
 			serverResponse: &types.SettleResponse{
 				Success: true,
@@ -496,14 +503,19 @@ func TestHubClient_Transfer(t *testing.T) {
 		},
 		{
 			name: "transfer with confirm false",
-			payload: &types.PaymentPayload{
-				X402Version: 1,
-				Network:     "base",
+			payload: &types.ExactEvmPayload{
+				Signature: "0xabcdef1234567890",
+				Authorization: &types.ExactEvmPayloadAuthorization{
+					From:        "0xSender2",
+					To:          "0xRecipient2",
+					Value:       "2000000",
+					ValidAfter:  "0",
+					ValidBefore: "9999999999",
+					Nonce:       "2",
+				},
 			},
-			requirements: &types.PaymentRequirements{
-				Network: "base",
-				Asset:   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-			},
+			network: "base",
+			asset:   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
 			confirm: false,
 			serverResponse: &types.SettleResponse{
 				Success: true,
@@ -520,7 +532,7 @@ func TestHubClient_Transfer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, http.MethodPost, r.Method)
-				assert.Equal(t, "/settle", r.URL.Path)
+				assert.Equal(t, "/transfer", r.URL.Path)
 
 				if tt.validateRequest != nil {
 					tt.validateRequest(t, r)
@@ -538,7 +550,7 @@ func TestHubClient_Transfer(t *testing.T) {
 				URL: server.URL,
 			})
 
-			resp, err := client.Transfer(tt.payload, tt.requirements, tt.confirm)
+			resp, err := client.Transfer(tt.payload, tt.network, tt.asset, tt.confirm)
 
 			if tt.expectedError {
 				assert.Error(t, err)
@@ -585,7 +597,175 @@ func TestHubClient_AuthHeadersError(t *testing.T) {
 			},
 		})
 
-		resp, err := client.Settle(&types.PaymentPayload{}, &types.PaymentRequirements{}, true, false)
+		resp, err := client.SettleWithOptions(&types.PaymentPayload{}, &types.PaymentRequirements{}, true, false)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to create auth headers")
+		assert.Nil(t, resp)
+	})
+}
+
+func TestHubClient_Supported(t *testing.T) {
+	tests := []struct {
+		name             string
+		serverResponse   *x402paytypes.SupportedResponse
+		serverStatusCode int
+		expectedError    bool
+		errorContains    string
+		validateRequest  func(*testing.T, *http.Request)
+	}{
+		{
+			name: "successful response with multiple networks",
+			serverResponse: &x402paytypes.SupportedResponse{
+				Kinds: []x402paytypes.NetworkKind{
+					{
+						Scheme:  "exact",
+						Network: "base",
+					},
+					{
+						Scheme:  "exact",
+						Network: "base-sepolia",
+					},
+					{
+						Scheme:  "exact",
+						Network: "ethereum",
+					},
+				},
+			},
+			serverStatusCode: http.StatusOK,
+			expectedError:    false,
+			validateRequest: func(t *testing.T, req *http.Request) {
+				assert.Equal(t, http.MethodGet, req.Method)
+				assert.Equal(t, "/supported", req.URL.Path)
+				assert.Equal(t, "application/json", req.Header.Get("Content-Type"))
+			},
+		},
+		{
+			name: "successful response with empty list",
+			serverResponse: &x402paytypes.SupportedResponse{
+				Kinds: []x402paytypes.NetworkKind{},
+			},
+			serverStatusCode: http.StatusOK,
+			expectedError:    false,
+		},
+		{
+			name:             "server returns 500 error",
+			serverResponse:   nil,
+			serverStatusCode: http.StatusInternalServerError,
+			expectedError:    true,
+			errorContains:    "failed to get supported networks",
+		},
+		{
+			name:             "server returns 404 error",
+			serverResponse:   nil,
+			serverStatusCode: http.StatusNotFound,
+			expectedError:    true,
+			errorContains:    "failed to get supported networks",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tt.validateRequest != nil {
+					tt.validateRequest(t, r)
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.serverStatusCode)
+				if tt.serverResponse != nil {
+					json.NewEncoder(w).Encode(tt.serverResponse)
+				}
+			}))
+			defer server.Close()
+
+			client := NewHubClient(&types.FacilitatorConfig{
+				URL: server.URL,
+			})
+
+			resp, err := client.Supported()
+
+			if tt.expectedError {
+				assert.Error(t, err)
+				if tt.errorContains != "" {
+					assert.Contains(t, err.Error(), tt.errorContains)
+				}
+				assert.Nil(t, resp)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, resp)
+				assert.Equal(t, len(tt.serverResponse.Kinds), len(resp.Kinds))
+				for i, kind := range tt.serverResponse.Kinds {
+					assert.Equal(t, kind.Scheme, resp.Kinds[i].Scheme)
+					assert.Equal(t, kind.Network, resp.Kinds[i].Network)
+				}
+			}
+		})
+	}
+
+	t.Run("invalid JSON response", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("invalid json"))
+		}))
+		defer server.Close()
+
+		client := NewHubClient(&types.FacilitatorConfig{
+			URL: server.URL,
+		})
+
+		resp, err := client.Supported()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to decode supported response")
+		assert.Nil(t, resp)
+	})
+
+	t.Run("auth headers are added when configured", func(t *testing.T) {
+		authHeaderCalled := false
+		expectedAuthHeader := "test-auth-token"
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, expectedAuthHeader, r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(&x402paytypes.SupportedResponse{
+				Kinds: []x402paytypes.NetworkKind{},
+			})
+		}))
+		defer server.Close()
+
+		client := NewHubClient(&types.FacilitatorConfig{
+			URL: server.URL,
+			CreateAuthHeaders: func() (map[string]map[string]string, error) {
+				authHeaderCalled = true
+				return map[string]map[string]string{
+					"supported": {
+						"Authorization": expectedAuthHeader,
+					},
+				}, nil
+			},
+		})
+
+		resp, err := client.Supported()
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+		assert.True(t, authHeaderCalled)
+	})
+
+	t.Run("auth header creation fails", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		client := NewHubClient(&types.FacilitatorConfig{
+			URL: server.URL,
+			CreateAuthHeaders: func() (map[string]map[string]string, error) {
+				return nil, assert.AnError
+			},
+		})
+
+		resp, err := client.Supported()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to create auth headers")
 		assert.Nil(t, resp)

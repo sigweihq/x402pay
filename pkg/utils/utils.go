@@ -126,16 +126,10 @@ func ToPaymentPayload(signature, fromAddress, toAddress, network string, value u
 		ValidBefore: validBefore,
 		Nonce:       nonce,
 	}
-
-	return &x402types.PaymentPayload{
-		X402Version: 1,
-		Scheme:      "exact",
-		Network:     network,
-		Payload: &x402types.ExactEvmPayload{
-			Signature:     signature,
-			Authorization: authorization,
-		},
-	}
+	return WrapExactEvmPayload(&x402types.ExactEvmPayload{
+		Signature:     signature,
+		Authorization: authorization,
+	}, network)
 }
 
 // CreatePaymentPayload creates a signed payment payload
@@ -200,4 +194,13 @@ func NewFacilitatorClient(config *x402types.FacilitatorConfig, httpClient *http.
 	client := facilitatorclient.NewFacilitatorClient(config)
 	client.HTTPClient = httpClient
 	return client
+}
+
+func WrapExactEvmPayload(payload *x402types.ExactEvmPayload, network string) *x402types.PaymentPayload {
+	return &x402types.PaymentPayload{
+		X402Version: 1,
+		Scheme:      "exact",
+		Network:     network,
+		Payload:     payload,
+	}
 }
