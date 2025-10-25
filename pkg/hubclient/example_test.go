@@ -114,9 +114,9 @@ func Example_historyQuery() {
 
 	// Query with filters
 	history, err := client.History.GetHistory(&x402paytypes.HistoryParams{
-		Network: "base",      // Filter by network
-		Limit:   20,          // Max 100
-		Offset:  0,           // For pagination
+		Network: "base", // Filter by network
+		Limit:   20,     // Max 100
+		Offset:  0,      // For pagination
 	})
 	if err != nil {
 		log.Fatal(err)

@@ -20,11 +20,11 @@ func stringPtr(s string) *string {
 
 func TestNewHubClient(t *testing.T) {
 	tests := []struct {
-		name           string
-		config         *types.FacilitatorConfig
-		expectedURL    string
-		expectTimeout  bool
-		timeoutValue   time.Duration
+		name          string
+		config        *types.FacilitatorConfig
+		expectedURL   string
+		expectTimeout bool
+		timeoutValue  time.Duration
 	}{
 		{
 			name:          "creates client with default config when nil",
@@ -88,17 +88,17 @@ func TestNewHubClient(t *testing.T) {
 
 func TestHubClient_Verify(t *testing.T) {
 	tests := []struct {
-		name               string
-		payload            *types.PaymentPayload
-		requirements       *types.PaymentRequirements
-		serverResponse     *types.VerifyResponse
-		serverStatusCode   int
-		serverError        bool
-		expectedError      bool
-		errorContains      string
-		authHeaders        map[string]map[string]string
-		authHeadersError   error
-		validateRequest    func(*testing.T, *http.Request)
+		name             string
+		payload          *types.PaymentPayload
+		requirements     *types.PaymentRequirements
+		serverResponse   *types.VerifyResponse
+		serverStatusCode int
+		serverError      bool
+		expectedError    bool
+		errorContains    string
+		authHeaders      map[string]map[string]string
+		authHeadersError error
+		validateRequest  func(*testing.T, *http.Request)
 	}{
 		{
 			name: "successful verification",

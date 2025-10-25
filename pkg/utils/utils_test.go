@@ -22,11 +22,11 @@ const testPrivateKeyHex = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784
 
 func TestAuthorizationToTypedData(t *testing.T) {
 	tests := []struct {
-		name                 string
-		paymentRequirements  *x402types.PaymentRequirements
-		authorization        *x402types.ExactEvmPayloadAuthorization
-		expectedError        bool
-		validateTypedData    func(*testing.T, string)
+		name                string
+		paymentRequirements *x402types.PaymentRequirements
+		authorization       *x402types.ExactEvmPayloadAuthorization
+		expectedError       bool
+		validateTypedData   func(*testing.T, string)
 	}{
 		{
 			name: "successful conversion for Base network",
@@ -325,16 +325,16 @@ func TestToPaymentPayload(t *testing.T) {
 
 func TestCreatePaymentPayload(t *testing.T) {
 	tests := []struct {
-		name           string
-		privateKeyHex  string
-		toAddress      string
-		network        string
-		value          uint64
-		nonce          string
-		validBefore    string
-		expectedError  bool
-		errorContains  string
-		validate       func(*testing.T, *x402types.PaymentPayload)
+		name          string
+		privateKeyHex string
+		toAddress     string
+		network       string
+		value         uint64
+		nonce         string
+		validBefore   string
+		expectedError bool
+		errorContains string
+		validate      func(*testing.T, *x402types.PaymentPayload)
 	}{
 		{
 			name:          "creates valid payment payload for Base network",

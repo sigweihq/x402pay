@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -383,4 +384,44 @@ func (r *RPCManager) CallContract(network, contractAddress, data string) (string
 	}
 
 	return "", fmt.Errorf("all RPC endpoints failed for network %s", network)
+}
+
+// isNonceAlreadyUsed checks if the nonce from the payment payload has already been used on-chain
+// by calling the USDC contract's authorizationState function
+func (r *RPCManager) IsNonceAlreadyUsed(nonce, authorizer, asset, network string) (bool, error) {
+	if nonce == "" {
+		return false, fmt.Errorf("nonce not found in payment payload")
+	}
+
+	// Prepare the contract call data
+	authorizerAddr := common.HexToAddress(authorizer)
+	nonceBytes32 := common.HexToHash(nonce)
+
+	// ABI for authorizationState function
+	contractABI := `[{"inputs":[{"internalType":"address","name":"authorizer","type":"address"},{"internalType":"bytes32","name":"nonce","type":"bytes32"}],"name":"authorizationState","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"}]`
+
+	parsedABI, err := abi.JSON(strings.NewReader(contractABI))
+	if err != nil {
+		return false, fmt.Errorf("failed to parse contract ABI: %w", err)
+	}
+
+	// Encode function call
+	data, err := parsedABI.Pack("authorizationState", authorizerAddr, nonceBytes32)
+	if err != nil {
+		return false, fmt.Errorf("failed to pack function call: %w", err)
+	}
+
+	result, err := r.CallContract(network, asset, common.Bytes2Hex(data))
+	if err != nil {
+		return false, fmt.Errorf("contract call failed: %w", err)
+	}
+
+	// Use the ABI to properly decode the result
+	var isUsed bool
+	err = parsedABI.UnpackIntoInterface(&isUsed, "authorizationState", common.Hex2Bytes(result[2:]))
+	if err != nil {
+		return false, fmt.Errorf("failed to decode contract call result: %w", err)
+	}
+
+	return isUsed, nil
 }
