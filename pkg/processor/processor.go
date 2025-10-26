@@ -27,6 +27,31 @@ type ProcessorConfig struct {
 	CDPAPIKeySecret string // Optional: Coinbase CDP API secret
 }
 
+// PaymentCallbacks provides hooks for monitoring payment processing operations
+type PaymentCallbacks struct {
+	// OnVerifyStart is called before each verification attempt
+	// Returns error if operation should be aborted
+	OnVerifyStart func(facilitatorURL string, attemptNumber int) error
+
+	// OnVerifyComplete is called after each verification attempt
+	// Parameters: facilitatorURL, attemptNumber, success, error, startTimeNanos, endTimeNanos
+	OnVerifyComplete func(facilitatorURL string, attemptNumber int, success bool, err error, startTime, endTime int64) error
+
+	// OnSettleStart is called before settlement attempt
+	// Returns error if operation should be aborted
+	OnSettleStart func(facilitatorURL string, attemptNumber int) error
+
+	// OnSettleComplete is called after settlement attempt
+	// Parameters: facilitatorURL, attemptNumber, success, error, startTimeNanos, endTimeNanos
+	OnSettleComplete func(facilitatorURL string, attemptNumber int, success bool, err error, startTime, endTime int64) error
+
+	// OnVerified is called after successful verification (before settlement)
+	OnVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error
+
+	// OnSettled is called after successful settlement
+	OnSettled func(*x402types.PaymentPayload, *x402types.PaymentRequirements, *x402types.SettleResponse) error
+}
+
 // PaymentProcessor handles x402 payment verification and settlement with failover support
 type PaymentProcessor struct {
 	facilitatorClients []*facilitatorclient.FacilitatorClient
@@ -133,18 +158,38 @@ func shouldRetryWithNextFacilitator(err error) bool {
 	return false
 }
 
-// tryVerifyWithFacilitator attempts payment verification with a single facilitator
-func (p *PaymentProcessor) tryVerifyWithFacilitator(
+// tryVerifyWithCallbacks attempts payment verification with a single facilitator
+func (p *PaymentProcessor) tryVerifyWithCallbacks(
 	client *facilitatorclient.FacilitatorClient,
 	paymentPayload *x402types.PaymentPayload,
 	paymentRequirements *x402types.PaymentRequirements,
-	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
+	attemptNumber int,
+	callbacks *PaymentCallbacks,
 ) (*x402types.VerifyResponse, error) {
+	// Call OnVerifyStart callback
+	if callbacks != nil && callbacks.OnVerifyStart != nil {
+		if err := callbacks.OnVerifyStart(client.URL, attemptNumber); err != nil {
+			return nil, fmt.Errorf("verify start callback failed: %w", err)
+		}
+	}
 
-	verifyResp, err := client.Verify(paymentPayload, paymentRequirements)
-	if err != nil {
-		p.logger.Error("Payment verification failed", "error", err)
-		return nil, fmt.Errorf("payment verification failed: %w", err)
+	verifyStart := utils.GetCurrentTimeNanos()
+	verifyResp, verifyErr := client.Verify(paymentPayload, paymentRequirements)
+	verifyEnd := utils.GetCurrentTimeNanos()
+
+	// Determine success
+	verifySuccess := verifyErr == nil && verifyResp != nil && verifyResp.IsValid
+
+	// Call OnVerifyComplete callback
+	if callbacks != nil && callbacks.OnVerifyComplete != nil {
+		if err := callbacks.OnVerifyComplete(client.URL, attemptNumber, verifySuccess, verifyErr, verifyStart, verifyEnd); err != nil {
+			p.logger.Warn("Verify complete callback failed", "error", err)
+		}
+	}
+
+	if verifyErr != nil {
+		p.logger.Error("Payment verification failed", "error", verifyErr)
+		return nil, fmt.Errorf("payment verification failed: %w", verifyErr)
 	}
 
 	if !verifyResp.IsValid {
@@ -155,9 +200,9 @@ func (p *PaymentProcessor) tryVerifyWithFacilitator(
 		return nil, fmt.Errorf("payment verification failed: %s", reason)
 	}
 
-	// Call verification callback
-	if onVerified != nil {
-		if err := onVerified(paymentPayload, paymentRequirements); err != nil {
+	// Call OnVerified callback after successful verification
+	if callbacks != nil && callbacks.OnVerified != nil {
+		if err := callbacks.OnVerified(paymentPayload, paymentRequirements); err != nil {
 			return nil, fmt.Errorf("verification callback failed: %w", err)
 		}
 	}
@@ -165,23 +210,44 @@ func (p *PaymentProcessor) tryVerifyWithFacilitator(
 	return verifyResp, nil
 }
 
-// tryFacilitatorWithCallback attempts payment verification and settlement with a single facilitator
-func (p *PaymentProcessor) tryFacilitatorWithCallback(
+// tryFacilitatorWithCallbacks attempts payment verification and settlement with a single facilitator
+func (p *PaymentProcessor) tryFacilitatorWithCallbacks(
 	client *facilitatorclient.FacilitatorClient,
 	paymentPayload *x402types.PaymentPayload,
 	paymentRequirements *x402types.PaymentRequirements,
-	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
+	attemptNumber int,
+	callbacks *PaymentCallbacks,
 ) (*x402types.SettleResponse, error) {
-	_, err := p.tryVerifyWithFacilitator(client, paymentPayload, paymentRequirements, onVerified)
+	// Verify payment with callbacks
+	_, err := p.tryVerifyWithCallbacks(client, paymentPayload, paymentRequirements, attemptNumber, callbacks)
 	if err != nil {
 		return nil, err
 	}
 
-	// Settle payment
-	settleResp, err := client.Settle(paymentPayload, paymentRequirements)
-	if err != nil {
-		p.logger.Error("Payment settlement failed", "error", err)
-		return nil, fmt.Errorf("payment settlement failed: %w", err)
+	// Call OnSettleStart callback
+	if callbacks != nil && callbacks.OnSettleStart != nil {
+		if err := callbacks.OnSettleStart(client.URL, attemptNumber); err != nil {
+			return nil, fmt.Errorf("settle start callback failed: %w", err)
+		}
+	}
+
+	settleStart := utils.GetCurrentTimeNanos()
+	settleResp, settleErr := client.Settle(paymentPayload, paymentRequirements)
+	settleEnd := utils.GetCurrentTimeNanos()
+
+	// Determine success
+	settleSuccess := settleErr == nil && settleResp != nil && settleResp.Success
+
+	// Call OnSettleComplete callback
+	if callbacks != nil && callbacks.OnSettleComplete != nil {
+		if err := callbacks.OnSettleComplete(client.URL, attemptNumber, settleSuccess, settleErr, settleStart, settleEnd); err != nil {
+			p.logger.Warn("Settle complete callback failed", "error", err)
+		}
+	}
+
+	if settleErr != nil {
+		p.logger.Error("Payment settlement failed", "error", settleErr)
+		return nil, fmt.Errorf("payment settlement failed: %w", settleErr)
 	}
 
 	if !settleResp.Success {
@@ -190,6 +256,13 @@ func (p *PaymentProcessor) tryFacilitatorWithCallback(
 			reason = *settleResp.ErrorReason
 		}
 		return nil, fmt.Errorf("payment settlement failed: %s", reason)
+	}
+
+	// Call OnSettled callback after successful settlement
+	if callbacks != nil && callbacks.OnSettled != nil {
+		if err := callbacks.OnSettled(paymentPayload, paymentRequirements, settleResp); err != nil {
+			return settleResp, fmt.Errorf("settlement callback failed: %w", err)
+		}
 	}
 
 	return settleResp, nil
@@ -201,16 +274,15 @@ func ProcessPayment(
 	paymentRequirements *x402types.PaymentRequirements,
 	confirm bool,
 ) (*x402types.SettleResponse, error) {
-	return ProcessPaymentWithCallback(paymentPayload, paymentRequirements, confirm, nil, nil)
+	return ProcessPaymentWithCallbacks(paymentPayload, paymentRequirements, confirm, nil)
 }
 
-// ProcessPaymentWithCallback verifies and settles a payment with an optional verification callback
-func ProcessPaymentWithCallback(
+// ProcessPaymentWithCallbacks verifies and settles a payment with comprehensive callback hooks for metrics collection
+func ProcessPaymentWithCallbacks(
 	paymentPayload *x402types.PaymentPayload,
 	paymentRequirements *x402types.PaymentRequirements,
 	confirm bool,
-	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
-	onSettled func(*x402types.PaymentPayload, *x402types.PaymentRequirements, *x402types.SettleResponse) error,
+	callbacks *PaymentCallbacks,
 ) (*x402types.SettleResponse, error) {
 	processor := getProcessor(paymentPayload.Network)
 	if processor == nil {
@@ -223,13 +295,9 @@ func ProcessPaymentWithCallback(
 
 	var lastErr error
 	for i, client := range processor.facilitatorClients {
-		processor.logger.Info("Trying facilitator",
-			"index", i+1,
-			"total", len(processor.facilitatorClients),
-			"url", client.URL,
-			"network", paymentPayload.Network)
+		attemptNumber := i + 1
 
-		settleResp, err := processor.tryFacilitatorWithCallback(client, paymentPayload, paymentRequirements, onVerified)
+		settleResp, err := processor.tryFacilitatorWithCallbacks(client, paymentPayload, paymentRequirements, attemptNumber, callbacks)
 		if err == nil {
 			processor.logger.Info("Facilitator succeeded", "url", client.URL)
 			if confirm {
@@ -239,13 +307,13 @@ func ProcessPaymentWithCallback(
 				}
 			}
 
-			if onSettled != nil {
-				if err := onSettled(paymentPayload, paymentRequirements, settleResp); err != nil {
-					return settleResp, fmt.Errorf("settlement callback failed: %w", err)
-				}
-			}
-
 			return settleResp, nil
+		}
+
+		// If settlement succeeded but callback failed, return the response with error
+		if settleResp != nil && settleResp.Success {
+			processor.logger.Warn("Settlement succeeded but callback failed", "url", client.URL, "error", err)
+			return settleResp, err
 		}
 
 		processor.logger.Warn("Facilitator attempt failed",
@@ -269,14 +337,14 @@ func VerifyPayment(
 	paymentPayload *x402types.PaymentPayload,
 	paymentRequirements *x402types.PaymentRequirements,
 ) (*x402types.VerifyResponse, error) {
-	return VerifyPaymentWithCallback(paymentPayload, paymentRequirements, nil)
+	return VerifyPaymentWithCallbacks(paymentPayload, paymentRequirements, nil)
 }
 
-// VerifyPaymentWithCallback verifies a payment with an optional verification callback
-func VerifyPaymentWithCallback(
+// VerifyPaymentWithCallbacks verifies a payment with comprehensive callback hooks for metrics collection
+func VerifyPaymentWithCallbacks(
 	paymentPayload *x402types.PaymentPayload,
 	paymentRequirements *x402types.PaymentRequirements,
-	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
+	callbacks *PaymentCallbacks,
 ) (*x402types.VerifyResponse, error) {
 	processor := getProcessor(paymentPayload.Network)
 	if processor == nil {
@@ -289,13 +357,14 @@ func VerifyPaymentWithCallback(
 
 	var lastErr error
 	for i, client := range processor.facilitatorClients {
+		attemptNumber := i + 1
 		processor.logger.Info("Trying facilitator for verification",
-			"index", i+1,
+			"index", attemptNumber,
 			"total", len(processor.facilitatorClients),
 			"url", client.URL,
 			"network", paymentPayload.Network)
 
-		verifyResp, err := processor.tryVerifyWithFacilitator(client, paymentPayload, paymentRequirements, onVerified)
+		verifyResp, err := processor.tryVerifyWithCallbacks(client, paymentPayload, paymentRequirements, attemptNumber, callbacks)
 		if err == nil {
 			processor.logger.Info("Facilitator verification succeeded", "url", client.URL)
 			return verifyResp, nil
@@ -357,20 +426,19 @@ func GetSupportedNetworks() []string {
 }
 
 func ProcessTransfer(paymentPayload *x402types.PaymentPayload, resourceURL, asset string) (*x402types.SettleResponse, error) {
-	return ProcessTransferWithCallback(paymentPayload, resourceURL, asset, nil, nil)
+	return ProcessTransferWithCallbacks(paymentPayload, resourceURL, asset, nil)
 }
 
-func ProcessTransferWithCallback(
+func ProcessTransferWithCallbacks(
 	paymentPayload *x402types.PaymentPayload,
 	resourceURL string,
 	asset string,
-	onVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error,
-	onSettled func(*x402types.PaymentPayload, *x402types.PaymentRequirements, *x402types.SettleResponse) error,
+	callbacks *PaymentCallbacks,
 ) (*x402types.SettleResponse, error) {
 	paymentRequirements, err := utils.DerivePaymentRequirements(paymentPayload, resourceURL, asset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive payment requirements: %w", err)
 	}
 
-	return ProcessPaymentWithCallback(paymentPayload, paymentRequirements, false, onVerified, onSettled)
+	return ProcessPaymentWithCallbacks(paymentPayload, paymentRequirements, false, callbacks)
 }

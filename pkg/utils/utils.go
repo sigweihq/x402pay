@@ -232,3 +232,8 @@ func ExtractExtraData(paymentRequirements *x402types.PaymentRequirements) (strin
 	}
 	return extraData["name"].(string), extraData["version"].(string), nil
 }
+
+// GetCurrentTimeNanos returns the current time in Unix nanoseconds
+func GetCurrentTimeNanos() int64 {
+	return time.Now().UnixNano()
+}

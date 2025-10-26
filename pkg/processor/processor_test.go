@@ -870,12 +870,15 @@ func TestProcessTransfertWithCallback(t *testing.T) {
 		resourceURL := "https://example.com/api/resource"
 
 		// Execute test
-		settleResp, err := ProcessTransferWithCallback(
+		callbacks := &PaymentCallbacks{
+			OnVerified: onVerified,
+			OnSettled:  onSettled,
+		}
+		settleResp, err := ProcessTransferWithCallbacks(
 			paymentPayload,
 			resourceURL,
 			constants.USDCAddressBase,
-			onVerified,
-			onSettled,
+			callbacks,
 		)
 
 		// Verify results
@@ -950,12 +953,15 @@ func TestProcessTransfertWithCallback(t *testing.T) {
 		)
 
 		// Execute test
-		settleResp, err := ProcessTransferWithCallback(
+		callbacks := &PaymentCallbacks{
+			OnVerified: onVerified,
+			OnSettled:  onSettled,
+		}
+		settleResp, err := ProcessTransferWithCallbacks(
 			paymentPayload,
 			"https://example.com/api/resource",
 			constants.USDCAddressBase,
-			onVerified,
-			onSettled,
+			callbacks,
 		)
 
 		// Verify error
@@ -1020,12 +1026,15 @@ func TestProcessTransfertWithCallback(t *testing.T) {
 		)
 
 		// Execute test
-		settleResp, err := ProcessTransferWithCallback(
+		callbacks := &PaymentCallbacks{
+			OnVerified: onVerified,
+			OnSettled:  onSettled,
+		}
+		settleResp, err := ProcessTransferWithCallbacks(
 			paymentPayload,
 			"https://example.com/api/resource",
 			constants.USDCAddressBase,
-			onVerified,
-			onSettled,
+			callbacks,
 		)
 
 		// Verify error - settlement succeeded but callback failed
