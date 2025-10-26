@@ -1,6 +1,8 @@
 # x402pay
 
-A Go library for processing x402 payments with facilitator aggregation and blockchain verification.
+A high-level Go SDK for processing x402 payments with facilitator aggregation and blockchain verification.
+
+Built on top of [coinbase/x402](https://github.com/coinbase/x402), this SDK provides production-ready payment processing with automatic failover, blockchain verification, and simplified integration.
 
 ## Features
 
@@ -9,6 +11,16 @@ A Go library for processing x402 payments with facilitator aggregation and block
 - **CDP Integration**: Built-in support for Coinbase Developer Platform facilitators
 - **RPC Failover**: Automatic RPC endpoint failover with health checking
 - **Stateless**: No dependencies on web frameworks - pure business logic
+
+## What is x402?
+
+[x402](https://github.com/coinbase/x402) is an HTTP payment protocol that enables paid API endpoints using blockchain-based payments. This SDK builds on the official protocol implementation to provide:
+
+- **Higher-level abstractions** - Simple payment processing without managing low-level protocol details
+- **Production features** - Facilitator failover, health checking, and blockchain verification
+- **Developer experience** - Minimal configuration with sensible defaults
+
+Use this SDK if you need to process x402 payments in your Go application. Use [coinbase/x402](https://github.com/coinbase/x402) directly if you're building protocol-level tooling or need low-level control.
 
 ## Installation
 
