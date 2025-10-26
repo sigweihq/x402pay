@@ -299,7 +299,6 @@ func ProcessPaymentWithCallbacks(
 
 		settleResp, err := processor.tryFacilitatorWithCallbacks(client, paymentPayload, paymentRequirements, attemptNumber, callbacks)
 		if err == nil {
-			processor.logger.Info("Facilitator succeeded", "url", client.URL)
 			if confirm {
 				if verifyErr := VerifySettledTransaction(settleResp, paymentPayload); verifyErr != nil {
 					processor.logger.Error("Transaction verification failed", "error", verifyErr)
