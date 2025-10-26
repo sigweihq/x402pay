@@ -75,7 +75,7 @@ func (c *HubClient) SettleWithOptions(payload *types.PaymentPayload, requirement
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/settle", c.URL), bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/settle", c.URL), bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -126,7 +126,7 @@ func (c *HubClient) Transfer(payload *types.ExactEvmPayload, network string, ass
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/transfer", c.URL), bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/transfer", c.URL), bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -164,7 +164,7 @@ func (c *HubClient) Transfer(payload *types.ExactEvmPayload, network string, ass
 }
 
 func (c *HubClient) Supported() (*x402paytypes.SupportedResponse, error) {
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/supported", c.URL), nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/supported", c.URL), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

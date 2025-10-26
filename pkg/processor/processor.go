@@ -318,7 +318,7 @@ func VerifyPaymentWithCallback(
 }
 
 func DiscoverSupported(c *facilitatorclient.FacilitatorClient) []string {
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/supported", c.URL), nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/supported", c.URL), nil)
 	if err != nil {
 		return []string{}
 	}
