@@ -186,7 +186,25 @@ func CreateHTTPClientWithTimeouts() *http.Client {
 			ResponseHeaderTimeout: constants.ResponseHeaderTimeout,
 			ExpectContinueTimeout: constants.ExpectContinueTimeout,
 		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse // Disable redirects to prevent redirect-based SSRF
+		},
 	}
+}
+
+// ValidateFacilitatorURL validates that a facilitator URL is secure
+// Returns error if URL doesn't use HTTPS (except for localhost/127.0.0.1 for testing)
+func ValidateFacilitatorURL(url string) error {
+	if !strings.HasPrefix(url, "https://") {
+		// Allow http://localhost and http://127.0.0.1 for testing
+		if strings.HasPrefix(url, "http://localhost") ||
+		   strings.HasPrefix(url, "http://127.0.0.1") ||
+		   strings.HasPrefix(url, "http://[::1]") {
+			return nil
+		}
+		return fmt.Errorf("facilitator URL must use HTTPS: %s", url)
+	}
+	return nil
 }
 
 func NewFacilitatorClient(config *x402types.FacilitatorConfig, httpClient *http.Client) *facilitatorclient.FacilitatorClient {

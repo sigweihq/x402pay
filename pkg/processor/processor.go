@@ -82,6 +82,10 @@ func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret str
 
 	// Create clients for each provided URL
 	for _, url := range urls {
+		// Validate URL security - skip invalid URLs
+		if err := utils.ValidateFacilitatorURL(url); err != nil {
+			continue
+		}
 		config := &x402types.FacilitatorConfig{URL: url}
 		client := utils.NewFacilitatorClient(config, httpClient)
 		supportedNetworks := DiscoverSupported(client)

@@ -12,6 +12,7 @@ import (
 	"github.com/coinbase/x402/go/pkg/facilitatorclient"
 	"github.com/coinbase/x402/go/pkg/types"
 	x402paytypes "github.com/sigweihq/x402pay/pkg/types"
+	"github.com/sigweihq/x402pay/pkg/utils"
 )
 
 // DefaultHubURL is the default URL for the x402 hub service
@@ -39,6 +40,11 @@ func NewHubClient(config *types.FacilitatorConfig) *HubClient {
 		config = &types.FacilitatorConfig{
 			URL: DefaultHubURL,
 		}
+	}
+
+	// Validate URL security - fall back to default if invalid
+	if err := utils.ValidateFacilitatorURL(config.URL); err != nil {
+		config.URL = DefaultHubURL
 	}
 
 	facilitatorClient := facilitatorclient.NewFacilitatorClient(config)
