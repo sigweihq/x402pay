@@ -28,8 +28,9 @@ func InitEVMChains(logger *slog.Logger, networksToMonitor ...string) error {
 	// Create chainlist.org endpoint provider
 	provider := NewChainListEndpointProvider(logger)
 
-	// Refresh endpoints immediately
-	if err := provider.RefreshEndpoints(); err != nil {
+	// Refresh endpoints asynchronously (starts with official endpoints, health checks in background)
+	// This allows the server to start immediately without blocking on health checks
+	if err := provider.RefreshEndpoints(networksToMonitor, true); err != nil {
 		logger.Warn("initial endpoint refresh failed, using official endpoints only", "error", err)
 	}
 
@@ -91,7 +92,8 @@ func startBackgroundRefresh(logger *slog.Logger, provider *ChainListEndpointProv
 	defer ticker.Stop()
 
 	for range ticker.C {
-		if err := provider.RefreshEndpoints(); err != nil {
+		// Background refresh runs synchronously within this goroutine
+		if err := provider.RefreshEndpoints(networks, false); err != nil {
 			logger.Warn("background endpoint refresh failed", "error", err)
 			continue
 		}

@@ -38,15 +38,13 @@ func GetGlobalRegistry() *Registry {
 }
 
 // Register registers a chain adapter (uses adapter.Network() as key)
+// If an adapter already exists for the network, it will be replaced (idempotent)
 func (r *Registry) Register(adapter ChainAdapter) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	network := adapter.Network()
-	if _, exists := r.adapters[network]; exists {
-		return fmt.Errorf("adapter already registered for network: %s", network)
-	}
-
+	// Update existing adapter or register new one (idempotent)
 	r.adapters[network] = adapter
 	return nil
 }
