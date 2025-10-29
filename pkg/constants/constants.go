@@ -10,7 +10,7 @@ const (
 	TLSHandshakeTimeout       = 10 * time.Second // timeout for TLS handshake
 	ResponseHeaderTimeout     = 20 * time.Second // timeout for response header
 	ExpectContinueTimeout     = 1 * time.Second  // timeout for expect continue
-	MaxRetries                = 10               // maximum number of retries for RPC calls
+	MaxRetries                = 15               // maximum number of retries for RPC calls
 	MaxResponseBodySize       = 10 * 1024 * 1024 // maximum response body size in bytes (10MB)
 )
 

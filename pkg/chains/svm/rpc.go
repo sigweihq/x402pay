@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"time"
 
@@ -35,12 +36,14 @@ func NewRPCClient(network string, endpoints []string) *RPCClient {
 var _ chains.RPCClient = (*RPCClient)(nil)
 
 // GetTransactionReceipt implements chains.RPCClient
-// Retries multiple times with exponential backoff, cycling through endpoints if needed
+// Retries multiple times with exponential backoff, cycling through endpoints with random start for load balancing
 func (r *RPCClient) GetTransactionReceipt(txHash string) (chains.TransactionReceipt, error) {
 	if len(r.endpoints) == 0 {
 		return nil, nil // Skip verification if no endpoints
 	}
 
+	// Start at a random position for load balancing
+	startIdx := rand.Intn(len(r.endpoints))
 	initialDelay := constants.DelayBetweenRPCCalls
 	var lastErr error
 
@@ -51,8 +54,9 @@ func (r *RPCClient) GetTransactionReceipt(txHash string) (chains.TransactionRece
 			time.Sleep(delay)
 		}
 
-		// Cycle through endpoints (wrap around if we have fewer endpoints than retries)
-		endpoint := r.endpoints[attempt%len(r.endpoints)]
+		// Cycle through endpoints with random start (wrap around if we have fewer endpoints than retries)
+		endpointIdx := (startIdx + attempt) % len(r.endpoints)
+		endpoint := r.endpoints[endpointIdx]
 
 		receipt, err := r.getTransaction(endpoint, txHash)
 		if err != nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -440,6 +441,7 @@ func (p *PaymentProcessor) tryFacilitatorWithCallbacks(
 }
 
 // retryWithFailover executes an operation with failover across multiple facilitators
+// Uses random start position for load balancing across facilitators
 func retryWithFailover[T any](
 	processor *PaymentProcessor,
 	facilitatorClients []*facilitatorclient.FacilitatorClient,
@@ -449,8 +451,15 @@ func retryWithFailover[T any](
 	var lastErr error
 	var zeroValue T
 
-	for i, client := range facilitatorClients {
+	// Start at a random position for load balancing
+	startIdx := rand.Intn(len(facilitatorClients))
+
+	for i := 0; i < len(facilitatorClients); i++ {
+		// Wrap around using modulo for round-robin
+		clientIdx := (startIdx + i) % len(facilitatorClients)
+		client := facilitatorClients[clientIdx]
 		attemptNumber := i + 1
+
 		result, err := operation(client, attemptNumber)
 		if err == nil {
 			return result, nil
@@ -483,6 +492,7 @@ func ProcessPayment(
 
 // ProcessPaymentWithCallbacks verifies and settles a payment with comprehensive callback hooks for metrics collection
 // Accepts any payload type (EVM or Solana)
+// Uses random start position for load balancing across facilitators
 func ProcessPaymentWithCallbacks(
 	paymentPayload any,
 	paymentRequirements *x402types.PaymentRequirements,
@@ -494,8 +504,14 @@ func ProcessPaymentWithCallbacks(
 		return nil, err
 	}
 
+	// Start at a random position for load balancing
+	startIdx := rand.Intn(len(facilitatorClients))
+
 	var lastErr error
-	for i, client := range facilitatorClients {
+	for i := 0; i < len(facilitatorClients); i++ {
+		// Wrap around using modulo for round-robin
+		clientIdx := (startIdx + i) % len(facilitatorClients)
+		client := facilitatorClients[clientIdx]
 		attemptNumber := i + 1
 
 		settleResp, err := processor.tryFacilitatorWithCallbacks(client, paymentPayload, paymentRequirements, attemptNumber, callbacks)

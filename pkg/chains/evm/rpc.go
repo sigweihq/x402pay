@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -38,17 +39,25 @@ var _ chains.RPCClient = (*RPCClient)(nil)
 var _ chains.EIP3009Checker = (*RPCClient)(nil)
 
 // GetTransactionReceipt implements chains.RPCClient
+// Uses random start position for load balancing across RPC endpoints
 func (r *RPCClient) GetTransactionReceipt(txHash string) (chains.TransactionReceipt, error) {
 	if len(r.endpoints) == 0 {
 		return nil, nil // Skip verification if no endpoints
 	}
 
+	// Start at a random position for load balancing
+	startIdx := rand.Intn(len(r.endpoints))
 	initialDelay := constants.DelayBetweenRPCCalls
-	for i, endpoint := range r.endpoints {
+
+	for i := 0; i < len(r.endpoints); i++ {
 		if i > 0 {
 			delay := time.Duration(i*constants.DelayBetweenRPCCalls+initialDelay) * time.Millisecond
 			time.Sleep(delay)
 		}
+
+		// Wrap around using modulo for round-robin
+		endpointIdx := (startIdx + i) % len(r.endpoints)
+		endpoint := r.endpoints[endpointIdx]
 
 		client, err := ethclient.Dial(endpoint)
 		if err != nil {
@@ -121,16 +130,24 @@ func (r *RPCClient) IsHealthy(endpoint string) bool {
 }
 
 // callContract makes a contract call with RPC failover
+// Uses random start position for load balancing across RPC endpoints
 func (r *RPCClient) callContract(contractAddress, data string) (string, error) {
 	if len(r.endpoints) == 0 {
 		return "", fmt.Errorf("no RPC endpoints available for network %s", r.network)
 	}
 
-	for i, endpoint := range r.endpoints {
+	// Start at a random position for load balancing
+	startIdx := rand.Intn(len(r.endpoints))
+
+	for i := 0; i < len(r.endpoints); i++ {
 		if i > 0 {
 			delay := time.Duration(i*constants.DelayBetweenRPCCalls) * time.Millisecond
 			time.Sleep(delay)
 		}
+
+		// Wrap around using modulo for round-robin
+		endpointIdx := (startIdx + i) % len(r.endpoints)
+		endpoint := r.endpoints[endpointIdx]
 
 		client, err := ethclient.Dial(endpoint)
 		if err != nil {

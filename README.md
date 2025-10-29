@@ -1,15 +1,16 @@
 # x402pay
 
-A high-level Go SDK for processing x402 payments with multi-network support, facilitator aggregation, and blockchain verification.
+A high-level Go SDK for processing x402 payments with multi-network support, facilitator aggregation, load balancing, and blockchain verification.
 
-Built on top of [coinbase/x402](https://github.com/coinbase/x402), this SDK provides production-ready payment processing with automatic failover, blockchain verification, and simplified integration.
+Built on top of [coinbase/x402](https://github.com/coinbase/x402), this SDK provides production-ready payment processing with load balancing, automatic failover, blockchain verification, and simplified integration.
 
 ## Features
 
 - **Multi-Network Support**: Support for EVM (Ethereum, Base, etc.) and SVM (Solana) chains
 - **Automatic Network Discovery**: Facilitators automatically discover and register supported networks via `/supported` endpoint
 - **Multi-Fee-Payer Support**: Route Solana transactions to the correct facilitator based on fee payer address
-- **Facilitator Aggregation**: Automatic failover between multiple x402 facilitators for high availability
+- **Load Balancing & Failover**: Random start + round-robin load balancing across facilitators with automatic failover for high availability
+- **RPC Load Balancing**: Load-balanced blockchain verification across multiple RPC endpoints to avoid rate limits and optimize costs
 - **Blockchain Verification**: Verify settled transactions on-chain to ensure payment integrity
 - **CDP Integration**: Built-in support for Coinbase Developer Platform facilitators
 - **RPC Failover**: Automatic RPC endpoint discovery and health checking for EVM chains
@@ -218,7 +219,8 @@ pkg/chains/
    - Supports optional verification callbacks
 
 2. **Chain Adapters** (`pkg/chains/`)
-   - Manages blockchain RPC endpoints
+   - Manages blockchain RPC endpoints with load balancing
+   - Random start + round-robin selection across RPC endpoints
    - Automatic health checking and prioritization
    - Chain-specific transaction validation
 
@@ -243,25 +245,41 @@ The library uses an internal map of network → `PaymentProcessor`:
 5. For Solana transactions, the fee payer is extracted and used to select the appropriate facilitator client
 6. All facilitator configs are created once during initialization, eliminating overhead on payment processing
 
-### Facilitator Failover
+### Facilitator Failover & Load Balancing
 
-The payment processor automatically tries multiple facilitators in sequence:
+The payment processor provides automatic load balancing and failover across multiple facilitators:
 
+**Load Balancing:**
+- Uses random start position with round-robin selection
+- Distributes requests evenly across all configured facilitators
+- Improves throughput and resource utilization
+- Example: With facilitators [A, B, C], requests might start at B→C→A, A→B→C, or C→A→B
+
+**Failover Logic:**
 1. Determines the network from `paymentPayload.Network`
 2. Retrieves the pre-configured processor for that network
 3. For Solana: Extracts the fee payer address and selects matching facilitators
-4. Attempts each facilitator in the processor's configuration list
-5. If it fails with retryable error (timeout, 5xx, auth), tries next
+4. Picks a random facilitator to start (for load balancing)
+5. If it fails with retryable error (timeout, 5xx, auth), tries next facilitator
 6. If it fails with client error (4xx, invalid signature), returns error immediately
-7. Continues until success or all facilitators exhausted
+7. Continues round-robin through all facilitators until success or all exhausted
+
+This approach ensures both high availability (failover) and efficient resource usage (load balancing).
 
 ### Blockchain Verification
 
-After facilitator settlement, the library:
+After facilitator settlement, the library verifies transactions on-chain with automatic load balancing and failover:
 
+**Load Balancing:**
+- Uses random start position with round-robin selection for RPC endpoints
+- Distributes verification requests evenly across all configured RPC endpoints
+- Prevents rate limiting on individual endpoints
+- Optimizes cost for paid RPC services (Alchemy, Infura, QuickNode)
+
+**Verification Process:**
 1. Validates settle response network matches payment payload network
 2. Extracts transaction hash from settle response
-3. Fetches transaction receipt from blockchain (with RPC failover)
+3. Fetches transaction receipt from blockchain (with load-balanced RPC failover)
 4. Validates transaction parameters using chain-specific validator:
    - Transaction succeeded (status == 1)
    - From/to addresses match signed payload
