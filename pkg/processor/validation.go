@@ -2,126 +2,80 @@ package processor
 
 import (
 	"fmt"
-	"math/big"
-	"strings"
 
 	x402types "github.com/coinbase/x402/go/pkg/types"
-	"github.com/ethereum/go-ethereum/common"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/sigweihq/x402pay/pkg/chains"
 )
 
 // extractTransactionHash extracts the transaction hash from a settle response
 func extractTransactionHash(settleResponse *x402types.SettleResponse) (string, error) {
-	// The settle response contains transaction hash in the Transaction field
-	txHash := settleResponse.Transaction
-	if txHash == "" {
-		return "", fmt.Errorf("no transaction hash in settle response")
+	if settleResponse.Network == "" {
+		return "", fmt.Errorf("settle response missing network field")
 	}
 
-	if !strings.HasPrefix(txHash, "0x") {
-		txHash = "0x" + txHash
+	registry := chains.GetGlobalRegistry()
+	if registry == nil {
+		return "", fmt.Errorf("chain registry not initialized")
 	}
 
-	// Validate hex format
-	if len(txHash) != 66 { // 0x + 64 hex chars
-		return "", fmt.Errorf("invalid transaction hash format: %s", txHash)
+	adapter, err := registry.Get(settleResponse.Network)
+	if err != nil {
+		return "", fmt.Errorf("no chain adapter for network %s: %w", settleResponse.Network, err)
 	}
 
-	return txHash, nil
+	return adapter.TransactionValidator().ExtractTransactionHash(settleResponse)
 }
 
-// validateTransactionParameters verifies the transaction matches the signed payload
-func (p *PaymentProcessor) validateTransactionParameters(
-	receipt *ethtypes.Receipt,
-	paymentPayload *x402types.PaymentPayload,
-) error {
-	// Check transaction succeeded
-	if receipt.Status != ethtypes.ReceiptStatusSuccessful {
-		return fmt.Errorf("transaction failed on blockchain")
-	}
-
-	// For USDC transfers, we need to parse the Transfer event
-	// Transfer(address indexed from, address indexed to, uint256 value)
-	transferEventSignature := crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
-
-	var transferFound bool
-	for _, log := range receipt.Logs {
-		if len(log.Topics) >= 3 && log.Topics[0] == transferEventSignature {
-			// Extract from, to, and value from the log
-			from := common.HexToAddress(log.Topics[1].Hex())
-			to := common.HexToAddress(log.Topics[2].Hex())
-			value := new(big.Int).SetBytes(log.Data)
-
-			// Get expected values from payment payload
-			expectedFrom := common.HexToAddress(paymentPayload.Payload.Authorization.From)
-			expectedTo := common.HexToAddress(paymentPayload.Payload.Authorization.To)
-			expectedValue, ok := new(big.Int).SetString(paymentPayload.Payload.Authorization.Value, 10)
-			if !ok {
-				return fmt.Errorf("invalid value format in payment payload")
-			}
-
-			// Verify parameters match
-			if from != expectedFrom {
-				return fmt.Errorf("transaction from address mismatch: got %s, expected %s",
-					from.Hex(), expectedFrom.Hex())
-			}
-			if to != expectedTo {
-				return fmt.Errorf("transaction to address mismatch: got %s, expected %s",
-					to.Hex(), expectedTo.Hex())
-			}
-			if value.Cmp(expectedValue) != 0 {
-				return fmt.Errorf("transaction value mismatch: got %s, expected %s",
-					value.String(), expectedValue.String())
-			}
-
-			transferFound = true
-			break
-		}
-	}
-
-	if !transferFound {
-		return fmt.Errorf("no USDC transfer event found in transaction")
-	}
-
-	return nil
-}
-
-// VerifySettledTransaction verifies that the facilitator-settled transaction actually occurred on blockchain
-func VerifySettledTransaction(
+// VerifySettledTransactionGeneric verifies that the facilitator-settled transaction actually occurred on blockchain
+// Works with any payload type (EVM or Solana) by delegating to chain-specific validators
+func VerifySettledTransactionGeneric(
 	settleResponse *x402types.SettleResponse,
-	paymentPayload *x402types.PaymentPayload,
+	paymentPayload any,
+	paymentRequirements *x402types.PaymentRequirements,
 ) error {
-	processor := getProcessor(paymentPayload.Network)
-	if processor == nil {
-		return fmt.Errorf("no processor configured for network: %s", paymentPayload.Network)
+	// Validate that settle response network matches payment requirements network
+	if settleResponse.Network != paymentRequirements.Network {
+		return fmt.Errorf("network mismatch: settle response has %s but payment requirements has %s",
+			settleResponse.Network, paymentRequirements.Network)
 	}
 
-	// Extract transaction hash from settle response
+	processor := getProcessor(paymentRequirements.Network)
+	if processor == nil {
+		return fmt.Errorf("no processor configured for network: %s", paymentRequirements.Network)
+	}
+
+	// Extract transaction hash using chain-specific validator
 	txHash, err := extractTransactionHash(settleResponse)
 	if err != nil {
 		return fmt.Errorf("failed to extract transaction hash: %w", err)
 	}
 
-	// Get transaction receipt with RPC failover using global manager
-	rpcManager := GetGlobalRPCManager()
-	receipt, err := rpcManager.GetTransactionReceipt(paymentPayload.Network, txHash)
+	// Get chain adapter from registry
+	registry := chains.GetGlobalRegistry()
+	if registry == nil {
+		return fmt.Errorf("chain registry not initialized - initialize chains at startup (e.g., svm.InitSVMChains(logger))")
+	}
+
+	adapter, err := registry.Get(paymentRequirements.Network)
+	if err != nil {
+		return fmt.Errorf("no chain adapter registered for network %s: %w", paymentRequirements.Network, err)
+	}
+
+	// Get transaction receipt using chain-specific RPC client
+	receipt, err := adapter.RPCClient().GetTransactionReceipt(txHash)
 	if err != nil {
 		return fmt.Errorf("blockchain verification failed: %w", err)
 	}
 
 	if receipt == nil {
-		// No RPC endpoints available - skip verification
 		processor.logger.Warn("skipping blockchain verification - no RPC endpoints available")
 		return nil
 	}
 
-	// Verify transaction parameters match what was signed
-	if err := processor.validateTransactionParameters(receipt, paymentPayload); err != nil {
+	validator := adapter.TransactionValidator()
+	if err := validator.ValidateTransaction(receipt, paymentPayload, paymentRequirements); err != nil {
 		return fmt.Errorf("transaction validation failed: %w", err)
 	}
-
-	processor.logger.Info("blockchain verification successful")
 
 	return nil
 }

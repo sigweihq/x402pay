@@ -10,9 +10,15 @@ type SupportedResponse struct {
 
 // NetworkKind contains information about a supported scheme/network combination
 type NetworkKind struct {
-	X402Version int    `json:"x402Version"`
-	Scheme      string `json:"scheme"`  // Payment scheme (e.g., "exact")
-	Network     string `json:"network"` // Network name (e.g., "base", "base-sepolia")
+	X402Version int               `json:"x402Version"`
+	Scheme      string            `json:"scheme"`          // Payment scheme (e.g., "exact")
+	Network     string            `json:"network"`         // Network name (e.g., "base", "base-sepolia")
+	Extra       *NetworkKindExtra `json:"extra,omitempty"` // Additional network-specific data
+}
+
+// NetworkKindExtra contains additional network-specific information
+type NetworkKindExtra struct {
+	FeePayer string `json:"feePayer,omitempty"` // Solana: fee payer address for transactions
 }
 
 // MessageResponse represents the auth message response

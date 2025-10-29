@@ -3,6 +3,7 @@ package processor
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -11,7 +12,9 @@ import (
 	"github.com/coinbase/x402/go/pkg/coinbasefacilitator"
 	"github.com/coinbase/x402/go/pkg/facilitatorclient"
 	x402types "github.com/coinbase/x402/go/pkg/types"
+	"github.com/sigweihq/x402pay/pkg/chains"
 	"github.com/sigweihq/x402pay/pkg/constants"
+	"github.com/sigweihq/x402pay/pkg/types"
 	"github.com/sigweihq/x402pay/pkg/utils"
 )
 
@@ -46,16 +49,21 @@ type PaymentCallbacks struct {
 	OnSettleComplete func(facilitatorURL string, attemptNumber int, success bool, err error, startTime, endTime int64) error
 
 	// OnVerified is called after successful verification (before settlement)
-	OnVerified func(*x402types.PaymentPayload, *x402types.PaymentRequirements) error
+	// Accepts any payload type (EVM or Solana)
+	OnVerified func(paymentPayload any, paymentRequirements *x402types.PaymentRequirements) error
 
 	// OnSettled is called after successful settlement
-	OnSettled func(*x402types.PaymentPayload, *x402types.PaymentRequirements, *x402types.SettleResponse) error
+	// Accepts any payload type (EVM or Solana)
+	OnSettled func(paymentPayload any, paymentRequirements *x402types.PaymentRequirements, settleResponse *x402types.SettleResponse) error
 }
 
 // PaymentProcessor handles x402 payment verification and settlement with failover support
 type PaymentProcessor struct {
-	facilitatorClients []*facilitatorclient.FacilitatorClient
-	logger             *slog.Logger
+	// Maps feePayer address to facilitator clients
+	// For EVM networks: key is "" (empty string)
+	// For SVM networks: key is the feePayer address (or "" if no specific feePayer)
+	feePayerToClients map[string][]*facilitatorclient.FacilitatorClient
+	logger            *slog.Logger
 }
 
 // InitProcessorMap initializes the processor map with the given configuration
@@ -66,18 +74,30 @@ func InitProcessorMap(config *ProcessorConfig, logger *slog.Logger) {
 	}
 
 	processorMapOnce.Do(func() {
-		networkToClients := bootstrapFacilitatorClients(config.FacilitatorURLs, config.CDPAPIKeyID, config.CDPAPIKeySecret)
-		for network, facilitatorClients := range networkToClients {
+		networkToFeePayerToClients := bootstrapFacilitatorClients(config.FacilitatorURLs, config.CDPAPIKeyID, config.CDPAPIKeySecret)
+		discoveredNetworks := make([]string, 0, len(networkToFeePayerToClients))
+		for network, feePayerToClients := range networkToFeePayerToClients {
 			processor := &PaymentProcessor{
-				facilitatorClients: facilitatorClients,
-				logger:             logger,
+				feePayerToClients: feePayerToClients,
+				logger:            logger,
 			}
-			logger.Info("Payment processor initialized", "network", network, "facilitators", len(facilitatorClients))
-			for i, client := range facilitatorClients {
-				logger.Info("Facilitator client initialized", "index", i+1, "url", client.URL)
+			// Count total facilitators across all fee payers
+			totalFacilitators := 0
+			for _, clients := range feePayerToClients {
+				totalFacilitators += len(clients)
+			}
+			logger.Info("Payment processor initialized", "network", network, "facilitators", totalFacilitators, "feePayerGroups", len(feePayerToClients))
+			for feePayer := range feePayerToClients {
+				feePayerLabel := feePayer
+				if feePayerLabel == "" {
+					feePayerLabel = "<no-fee-payer>"
+				}
 			}
 			processorMap.Store(network, processor)
+			discoveredNetworks = append(discoveredNetworks, network)
 		}
+		// Store discovered networks for chain auto-discovery
+		chains.SetDiscoveredNetworks(discoveredNetworks)
 	})
 }
 
@@ -89,9 +109,31 @@ func getProcessor(network string) *PaymentProcessor {
 	return processor.(*PaymentProcessor)
 }
 
+// registerClientForSupportedNetworks discovers supported networks for a client and registers it
+func registerClientForSupportedNetworks(
+	client *facilitatorclient.FacilitatorClient,
+	networkToFeePayerToClients map[string]map[string][]*facilitatorclient.FacilitatorClient,
+) {
+	supportedKinds := DiscoverSupported(client)
+	for _, kind := range supportedKinds {
+		network := kind.Network
+		feePayer := ""
+		if kind.Extra != nil && kind.Extra.FeePayer != "" {
+			feePayer = kind.Extra.FeePayer
+		}
+
+		if networkToFeePayerToClients[network] == nil {
+			networkToFeePayerToClients[network] = make(map[string][]*facilitatorclient.FacilitatorClient)
+		}
+		networkToFeePayerToClients[network][feePayer] = append(networkToFeePayerToClients[network][feePayer], client)
+	}
+}
+
 // bootstrapFacilitatorClients creates pre-configured facilitator clients from URLs or CDP credentials
-func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret string) map[string][]*facilitatorclient.FacilitatorClient {
-	networkToClients := make(map[string][]*facilitatorclient.FacilitatorClient)
+// Returns a nested map: network -> feePayer -> []*FacilitatorClient
+// For EVM networks, feePayer is "" (empty string)
+func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret string) map[string]map[string][]*facilitatorclient.FacilitatorClient {
+	networkToFeePayerToClients := make(map[string]map[string][]*facilitatorclient.FacilitatorClient)
 	// Create HTTP client with timeouts once, reused for all clients
 	httpClient := utils.CreateHTTPClientWithTimeouts()
 
@@ -99,10 +141,8 @@ func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret str
 	if cdpAPIKeyID != "" && cdpAPIKeySecret != "" {
 		config := coinbasefacilitator.CreateFacilitatorConfig(cdpAPIKeyID, cdpAPIKeySecret)
 		client := utils.NewFacilitatorClient(config, httpClient)
-		supportedNetworks := []string{constants.NetworkBase, constants.NetworkBaseSepolia, constants.NetworkSolana, constants.NetworkSolanaDevnet}
-		for _, network := range supportedNetworks {
-			networkToClients[network] = append(networkToClients[network], client)
-		}
+		// CDP facilitator supports these networks - discover their capabilities
+		registerClientForSupportedNetworks(client, networkToFeePayerToClients)
 	}
 
 	// Create clients for each provided URL
@@ -113,13 +153,10 @@ func bootstrapFacilitatorClients(urls []string, cdpAPIKeyID, cdpAPIKeySecret str
 		}
 		config := &x402types.FacilitatorConfig{URL: url}
 		client := utils.NewFacilitatorClient(config, httpClient)
-		supportedNetworks := DiscoverSupported(client)
-		for _, network := range supportedNetworks {
-			networkToClients[network] = append(networkToClients[network], client)
-		}
+		registerClientForSupportedNetworks(client, networkToFeePayerToClients)
 	}
 
-	return networkToClients
+	return networkToFeePayerToClients
 }
 
 // shouldRetryWithNextFacilitator determines if we should try the next facilitator
@@ -158,10 +195,143 @@ func shouldRetryWithNextFacilitator(err error) bool {
 	return false
 }
 
+// extractNetwork extracts the network field from any payment payload type
+func extractNetwork(paymentPayload any) (string, error) {
+	// Try x402 PaymentPayload first
+	if p, ok := paymentPayload.(*x402types.PaymentPayload); ok {
+		return p.Network, nil
+	}
+
+	// Try to marshal and extract from JSON
+	data, err := json.Marshal(paymentPayload)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract network from payload: %w", err)
+	}
+	var temp map[string]any
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return "", fmt.Errorf("failed to parse payload: %w", err)
+	}
+	if network, ok := temp["network"].(string); ok {
+		return network, nil
+	}
+
+	return "", fmt.Errorf("failed to extract network from payment payload")
+}
+
+// extractFeePayerFromSolanaPayload extracts the fee payer from a Solana transaction
+// Returns empty string for non-Solana payloads or if extraction fails
+func extractFeePayerFromSolanaPayload(paymentPayload any) string {
+	// Try SolanaPaymentPayload first
+	if p, ok := paymentPayload.(*types.SolanaPaymentPayload); ok {
+		return utils.ExtractFeePayerFromSolanaTransaction(p.Payload.Transaction)
+	}
+
+	// Try to extract transaction from JSON for generic payloads
+	data, err := json.Marshal(paymentPayload)
+	if err != nil {
+		return ""
+	}
+	var temp map[string]any
+	if err := json.Unmarshal(data, &temp); err != nil {
+		return ""
+	}
+
+	// Check if there's a nested payload with transaction
+	if payload, ok := temp["payload"].(map[string]any); ok {
+		if txBase64, ok := payload["transaction"].(string); ok {
+			return utils.ExtractFeePayerFromSolanaTransaction(txBase64)
+		}
+	}
+
+	return ""
+}
+
+// getFacilitatorClientsForPayment extracts network, gets processor, and returns facilitator clients for a payment
+func getFacilitatorClientsForPayment(
+	paymentPayload any,
+) (*PaymentProcessor, []*facilitatorclient.FacilitatorClient, string, error) {
+	network, err := extractNetwork(paymentPayload)
+	if err != nil {
+		return nil, nil, "", err
+	}
+
+	processor := getProcessor(network)
+	if processor == nil {
+		return nil, nil, "", fmt.Errorf("no processor configured for network: %s", network)
+	}
+
+	// Extract feePayer for routing (empty string for EVM or if not found)
+	feePayer := extractFeePayerFromSolanaPayload(paymentPayload)
+
+	// Get facilitator clients for this feePayer
+	facilitatorClients := processor.feePayerToClients[feePayer]
+
+	// Fallback to clients with no specific feePayer if none found
+	if len(facilitatorClients) == 0 && feePayer != "" {
+		facilitatorClients = processor.feePayerToClients[""]
+	}
+
+	if len(facilitatorClients) == 0 {
+		if feePayer != "" {
+			return nil, nil, "", fmt.Errorf("no facilitator clients available for network %s with feePayer %s", network, feePayer)
+		}
+		return nil, nil, "", fmt.Errorf("no facilitator clients available for network: %s", network)
+	}
+
+	return processor, facilitatorClients, network, nil
+}
+
+// verifyPaymentGeneric performs verification for any payload type (EVM or Solana)
+// Uses the reusable HTTP helper to avoid code duplication
+func verifyPaymentGeneric(
+	client *facilitatorclient.FacilitatorClient,
+	paymentPayload any,
+	paymentRequirements *x402types.PaymentRequirements,
+) (*x402types.VerifyResponse, error) {
+	requestBody := map[string]any{
+		"x402Version":         1,
+		"paymentPayload":      paymentPayload,
+		"paymentRequirements": paymentRequirements,
+	}
+
+	return utils.MakeJSONRequest[x402types.VerifyResponse](
+		client.HTTPClient,
+		http.MethodPost,
+		fmt.Sprintf("%s/verify", client.URL),
+		requestBody,
+		client.CreateAuthHeaders,
+		"verify",
+	)
+}
+
+// settlePaymentGeneric performs settlement for any payload type (EVM or Solana)
+// Uses the reusable HTTP helper to avoid code duplication
+func settlePaymentGeneric(
+	client *facilitatorclient.FacilitatorClient,
+	paymentPayload any,
+	paymentRequirements *x402types.PaymentRequirements,
+) (*x402types.SettleResponse, error) {
+	requestBody := map[string]any{
+		"x402Version":         1,
+		"paymentPayload":      paymentPayload,
+		"paymentRequirements": paymentRequirements,
+	}
+
+	return utils.MakeJSONRequest[x402types.SettleResponse](
+		client.HTTPClient,
+		http.MethodPost,
+		fmt.Sprintf("%s/settle", client.URL),
+		requestBody,
+		client.CreateAuthHeaders,
+		"settle",
+	)
+}
+
 // tryVerifyWithCallbacks attempts payment verification with a single facilitator
+// Accepts any payload type (EVM or Solana)
 func (p *PaymentProcessor) tryVerifyWithCallbacks(
 	client *facilitatorclient.FacilitatorClient,
-	paymentPayload *x402types.PaymentPayload,
+	paymentPayload any,
 	paymentRequirements *x402types.PaymentRequirements,
 	attemptNumber int,
 	callbacks *PaymentCallbacks,
@@ -174,7 +344,7 @@ func (p *PaymentProcessor) tryVerifyWithCallbacks(
 	}
 
 	verifyStart := utils.GetCurrentTimeNanos()
-	verifyResp, verifyErr := client.Verify(paymentPayload, paymentRequirements)
+	verifyResp, verifyErr := verifyPaymentGeneric(client, paymentPayload, paymentRequirements)
 	verifyEnd := utils.GetCurrentTimeNanos()
 
 	// Determine success
@@ -211,9 +381,10 @@ func (p *PaymentProcessor) tryVerifyWithCallbacks(
 }
 
 // tryFacilitatorWithCallbacks attempts payment verification and settlement with a single facilitator
+// Accepts any payload type (EVM or Solana)
 func (p *PaymentProcessor) tryFacilitatorWithCallbacks(
 	client *facilitatorclient.FacilitatorClient,
-	paymentPayload *x402types.PaymentPayload,
+	paymentPayload any,
 	paymentRequirements *x402types.PaymentRequirements,
 	attemptNumber int,
 	callbacks *PaymentCallbacks,
@@ -232,7 +403,7 @@ func (p *PaymentProcessor) tryFacilitatorWithCallbacks(
 	}
 
 	settleStart := utils.GetCurrentTimeNanos()
-	settleResp, settleErr := client.Settle(paymentPayload, paymentRequirements)
+	settleResp, settleErr := settlePaymentGeneric(client, paymentPayload, paymentRequirements)
 	settleEnd := utils.GetCurrentTimeNanos()
 
 	// Determine success
@@ -268,9 +439,42 @@ func (p *PaymentProcessor) tryFacilitatorWithCallbacks(
 	return settleResp, nil
 }
 
+// retryWithFailover executes an operation with failover across multiple facilitators
+func retryWithFailover[T any](
+	processor *PaymentProcessor,
+	facilitatorClients []*facilitatorclient.FacilitatorClient,
+	operation func(*facilitatorclient.FacilitatorClient, int) (T, error),
+	operationName string,
+) (T, error) {
+	var lastErr error
+	var zeroValue T
+
+	for i, client := range facilitatorClients {
+		attemptNumber := i + 1
+		result, err := operation(client, attemptNumber)
+		if err == nil {
+			return result, nil
+		}
+
+		processor.logger.Warn(fmt.Sprintf("Facilitator %s attempt failed", operationName),
+			"url", client.URL,
+			"error", err,
+			"willRetry", shouldRetryWithNextFacilitator(err))
+
+		lastErr = err
+
+		if !shouldRetryWithNextFacilitator(err) {
+			return zeroValue, err
+		}
+	}
+
+	return zeroValue, fmt.Errorf("all facilitators failed, last error: %w", lastErr)
+}
+
 // ProcessPayment verifies and settles a payment with failover support across multiple facilitators
+// Accepts any payload type (EVM or Solana)
 func ProcessPayment(
-	paymentPayload *x402types.PaymentPayload,
+	paymentPayload any,
 	paymentRequirements *x402types.PaymentRequirements,
 	confirm bool,
 ) (*x402types.SettleResponse, error) {
@@ -278,29 +482,26 @@ func ProcessPayment(
 }
 
 // ProcessPaymentWithCallbacks verifies and settles a payment with comprehensive callback hooks for metrics collection
+// Accepts any payload type (EVM or Solana)
 func ProcessPaymentWithCallbacks(
-	paymentPayload *x402types.PaymentPayload,
+	paymentPayload any,
 	paymentRequirements *x402types.PaymentRequirements,
 	confirm bool,
 	callbacks *PaymentCallbacks,
 ) (*x402types.SettleResponse, error) {
-	processor := getProcessor(paymentPayload.Network)
-	if processor == nil {
-		return nil, fmt.Errorf("no processor configured for network: %s", paymentPayload.Network)
-	}
-
-	if len(processor.facilitatorClients) == 0 {
-		return nil, fmt.Errorf("no facilitator clients available")
+	processor, facilitatorClients, _, err := getFacilitatorClientsForPayment(paymentPayload)
+	if err != nil {
+		return nil, err
 	}
 
 	var lastErr error
-	for i, client := range processor.facilitatorClients {
+	for i, client := range facilitatorClients {
 		attemptNumber := i + 1
 
 		settleResp, err := processor.tryFacilitatorWithCallbacks(client, paymentPayload, paymentRequirements, attemptNumber, callbacks)
 		if err == nil {
 			if confirm {
-				if verifyErr := VerifySettledTransaction(settleResp, paymentPayload); verifyErr != nil {
+				if verifyErr := VerifySettledTransactionGeneric(settleResp, paymentPayload, paymentRequirements); verifyErr != nil {
 					processor.logger.Error("Transaction verification failed", "error", verifyErr)
 					return nil, verifyErr
 				}
@@ -332,92 +533,71 @@ func ProcessPaymentWithCallbacks(
 }
 
 // VerifyPayment verifies a payment with failover support across multiple facilitators
+// Accepts any payload type (EVM or Solana)
 func VerifyPayment(
-	paymentPayload *x402types.PaymentPayload,
+	paymentPayload any,
 	paymentRequirements *x402types.PaymentRequirements,
 ) (*x402types.VerifyResponse, error) {
 	return VerifyPaymentWithCallbacks(paymentPayload, paymentRequirements, nil)
 }
 
 // VerifyPaymentWithCallbacks verifies a payment with comprehensive callback hooks for metrics collection
+// Accepts any payload type (EVM or Solana)
 func VerifyPaymentWithCallbacks(
-	paymentPayload *x402types.PaymentPayload,
+	paymentPayload any,
 	paymentRequirements *x402types.PaymentRequirements,
 	callbacks *PaymentCallbacks,
 ) (*x402types.VerifyResponse, error) {
-	processor := getProcessor(paymentPayload.Network)
-	if processor == nil {
-		return nil, fmt.Errorf("no processor configured for network: %s", paymentPayload.Network)
+	processor, facilitatorClients, _, err := getFacilitatorClientsForPayment(paymentPayload)
+	if err != nil {
+		return nil, err
 	}
 
-	if len(processor.facilitatorClients) == 0 {
-		return nil, fmt.Errorf("no facilitator clients available")
-	}
-
-	var lastErr error
-	for i, client := range processor.facilitatorClients {
-		attemptNumber := i + 1
-		processor.logger.Info("Trying facilitator for verification",
-			"index", attemptNumber,
-			"total", len(processor.facilitatorClients),
-			"url", client.URL,
-			"network", paymentPayload.Network)
-
-		verifyResp, err := processor.tryVerifyWithCallbacks(client, paymentPayload, paymentRequirements, attemptNumber, callbacks)
-		if err == nil {
-			processor.logger.Info("Facilitator verification succeeded", "url", client.URL)
-			return verifyResp, nil
-		}
-
-		processor.logger.Warn("Facilitator verification attempt failed",
-			"url", client.URL,
-			"error", err,
-			"willRetry", shouldRetryWithNextFacilitator(err))
-
-		lastErr = err
-
-		// Don't retry for validation/client errors
-		if !shouldRetryWithNextFacilitator(err) {
-			return nil, err
-		}
-	}
-
-	return nil, fmt.Errorf("all facilitators failed, last error: %w", lastErr)
+	return retryWithFailover(
+		processor,
+		facilitatorClients,
+		func(client *facilitatorclient.FacilitatorClient, attemptNumber int) (*x402types.VerifyResponse, error) {
+			return processor.tryVerifyWithCallbacks(client, paymentPayload, paymentRequirements, attemptNumber, callbacks)
+		},
+		"verification",
+	)
 }
 
-func DiscoverSupported(c *facilitatorclient.FacilitatorClient) []string {
+func DiscoverSupported(c *facilitatorclient.FacilitatorClient) []types.NetworkKind {
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/supported", c.URL), nil)
 	if err != nil {
-		return []string{}
+		return []types.NetworkKind{}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return []string{}
+		return []types.NetworkKind{}
 	}
 	defer resp.Body.Close()
 
-	networks := make([]string, 0)
-	var supportedNetworks struct {
-		Kinds []struct {
-			Scheme  string `json:"scheme"`
-			Network string `json:"network"`
-		} `json:"kinds"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&supportedNetworks); err != nil {
-		return []string{}
-	}
-	for _, kind := range supportedNetworks.Kinds {
-		networks = append(networks, kind.Network)
+	// Check HTTP status code
+	if resp.StatusCode != http.StatusOK {
+		return []types.NetworkKind{}
 	}
 
-	return networks
+	limitedReader := io.LimitReader(resp.Body, int64(constants.MaxResponseBodySize))
+
+	var supportedNetworks struct {
+		Kinds []types.NetworkKind `json:"kinds"`
+	}
+	if err := json.NewDecoder(limitedReader).Decode(&supportedNetworks); err != nil {
+		return []types.NetworkKind{}
+	}
+
+	return supportedNetworks.Kinds
 }
 
+// GetSupportedNetworks returns all networks discovered by facilitators
+// For more granular filtering, use chains.GetDiscoveredEVMNetworks() or chains.GetDiscoveredSVMNetworks()
 func GetSupportedNetworks() []string {
 	// return keys of processorMap
 	keys := make([]string, 0)
-	processorMap.Range(func(key, _ interface{}) bool {
+	processorMap.Range(func(key, _ any) bool {
 		keys = append(keys, key.(string))
 		return true
 	})

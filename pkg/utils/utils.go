@@ -1,113 +1,38 @@
 package utils
 
 import (
+	"bytes"
 	"crypto/ecdsa"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/coinbase/x402/go/pkg/facilitatorclient"
 	x402types "github.com/coinbase/x402/go/pkg/types"
-	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/signer/core/apitypes"
+	"github.com/sigweihq/x402pay/pkg/chains/evm"
 	"github.com/sigweihq/x402pay/pkg/constants"
 )
 
 // AuthorizationToTypedData converts an x402 authorization to EIP-712 typed data JSON
+// This function is EVM-specific and only works with ExactEvmPayloadAuthorization
 func AuthorizationToTypedData(paymentRequirements *x402types.PaymentRequirements, authorization *x402types.ExactEvmPayloadAuthorization, domainName string) (string, error) {
-	typedData := apitypes.TypedData{
-		Types: apitypes.Types{
-			"EIP712Domain": []apitypes.Type{
-				{Name: "name", Type: "string"},
-				{Name: "version", Type: "string"},
-				{Name: "chainId", Type: "uint256"},
-				{Name: "verifyingContract", Type: "address"},
-			},
-			"TransferWithAuthorization": []apitypes.Type{
-				{Name: "from", Type: "address"},
-				{Name: "to", Type: "address"},
-				{Name: "value", Type: "uint256"},
-				{Name: "validAfter", Type: "uint256"},
-				{Name: "validBefore", Type: "uint256"},
-				{Name: "nonce", Type: "bytes32"},
-			},
-		},
-		PrimaryType: "TransferWithAuthorization",
-		Domain: apitypes.TypedDataDomain{
-			Name:              domainName,
-			Version:           "2",
-			ChainId:           math.NewHexOrDecimal256(constants.NetworkToChainID[paymentRequirements.Network]),
-			VerifyingContract: strings.ToLower(paymentRequirements.Asset),
-		},
-		Message: apitypes.TypedDataMessage{
-			"from":        strings.ToLower(authorization.From),
-			"to":          strings.ToLower(authorization.To),
-			"value":       authorization.Value,
-			"validAfter":  authorization.ValidAfter,
-			"validBefore": authorization.ValidBefore,
-			"nonce":       authorization.Nonce,
-		},
-	}
-
-	typedDataJSON, err := json.Marshal(typedData)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal typed data: %w", err)
-	}
-
-	return string(typedDataJSON), nil
+	evmScheme := evm.NewSignatureScheme()
+	return evmScheme.CreateTypedData(paymentRequirements, authorization, domainName)
 }
 
-// CreateSignatureForTransfer creates a signature for the server-side transfer
+// CreateSignatureForTransfer creates an EIP-3009 signature for USDC TransferWithAuthorization
+// This function is EVM-specific and only works with ExactEvmPayloadAuthorization
 func CreateSignatureForTransfer(privateKey *ecdsa.PrivateKey, authorization *x402types.ExactEvmPayloadAuthorization, network, asset, domainName string) string {
-	// Create payment requirements - reuse existing structures
-	paymentRequirements := &x402types.PaymentRequirements{
-		Network: network,
-		Asset:   asset,
-	}
-
-	// Use the existing authorizationToTypedData function from transactions package
-	typedDataJSON, err := AuthorizationToTypedData(paymentRequirements, authorization, domainName)
+	evmScheme := evm.NewSignatureScheme()
+	signature, err := evmScheme.CreateSignature(privateKey, authorization, network, asset, domainName)
 	if err != nil {
 		return "0x" + strings.Repeat("0", 130)
 	}
-
-	// Parse the typed data and sign it
-	var typedData apitypes.TypedData
-	if err := json.Unmarshal([]byte(typedDataJSON), &typedData); err != nil {
-		return "0x" + strings.Repeat("0", 130)
-	}
-
-	// Hash the structured data
-	hash, err := typedData.HashStruct(typedData.PrimaryType, typedData.Message)
-	if err != nil {
-		return "0x" + strings.Repeat("0", 130)
-	}
-
-	// Create domain separator
-	domainSeparator, err := typedData.HashStruct("EIP712Domain", typedData.Domain.Map())
-	if err != nil {
-		return "0x" + strings.Repeat("0", 130)
-	}
-
-	// Create final hash with EIP-712 prefix
-	finalHash := crypto.Keccak256([]byte("\x19\x01"), domainSeparator, hash)
-
-	// Sign the hash
-	signature, err := crypto.Sign(finalHash, privateKey)
-	if err != nil {
-		return "0x" + strings.Repeat("0", 130)
-	}
-
-	// Convert v from recovery id to ethereum format (27/28)
-	if len(signature) == 65 {
-		signature[64] += 27
-	}
-
-	return "0x" + hex.EncodeToString(signature)
+	return signature
 }
 
 // ToPaymentPayload converts payment data to an x402 payment payload
@@ -169,7 +94,9 @@ func DerivePaymentRequirements(
 		Extra:             nil,
 	}
 
-	if assetLower == strings.ToLower(constants.USDCAddressBase) || assetLower == strings.ToLower(constants.USDCAddressBaseSepolia) {
+	usdcAddress := constants.NetworkToUSDCAddress[paymentPayload.Network]
+
+	if assetLower == strings.ToLower(usdcAddress) {
 		if err := paymentRequirements.SetUSDCInfo(paymentPayload.Network == constants.NetworkBaseSepolia); err != nil {
 			return nil, fmt.Errorf("failed to set USDC info: %w", err)
 		}
@@ -198,8 +125,8 @@ func ValidateFacilitatorURL(url string) error {
 	if !strings.HasPrefix(url, "https://") {
 		// Allow http://localhost and http://127.0.0.1 for testing
 		if strings.HasPrefix(url, "http://localhost") ||
-		   strings.HasPrefix(url, "http://127.0.0.1") ||
-		   strings.HasPrefix(url, "http://[::1]") {
+			strings.HasPrefix(url, "http://127.0.0.1") ||
+			strings.HasPrefix(url, "http://[::1]") {
 			return nil
 		}
 		return fmt.Errorf("facilitator URL must use HTTPS: %s", url)
@@ -230,10 +157,85 @@ func ExtractExtraData(paymentRequirements *x402types.PaymentRequirements) (strin
 			return "", "", fmt.Errorf("failed to unmarshal Extra: %w", err)
 		}
 	}
-	return extraData["name"].(string), extraData["version"].(string), nil
+
+	if extraData == nil {
+		return "", "", fmt.Errorf("Extra data is nil")
+	}
+
+	name, ok := extraData["name"].(string)
+	if !ok {
+		return "", "", fmt.Errorf("name field missing or not a string")
+	}
+
+	version, ok := extraData["version"].(string)
+	if !ok {
+		return "", "", fmt.Errorf("version field missing or not a string")
+	}
+
+	return name, version, nil
 }
 
 // GetCurrentTimeNanos returns the current time in Unix nanoseconds
 func GetCurrentTimeNanos() int64 {
 	return time.Now().UnixNano()
+}
+
+// MakeJSONRequest is a generic helper for making HTTP requests with JSON payloads
+// It handles marshaling, auth headers, and response decoding
+func MakeJSONRequest[T any](
+	client *http.Client,
+	method string,
+	url string,
+	requestBody any,
+	createAuthHeaders func() (map[string]map[string]string, error),
+	endpointName string, // e.g., "verify", "settle" - used to look up auth headers
+) (*T, error) {
+	// Marshal request body
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequest(method, url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Add auth headers if available
+	if createAuthHeaders != nil {
+		headers, err := createAuthHeaders()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create auth headers: %w", err)
+		}
+		if endpointHeaders, ok := headers[endpointName]; ok {
+			for key, value := range endpointHeaders {
+				req.Header.Set(key, value)
+			}
+		}
+	}
+
+	// Execute request
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send %s request: %w", endpointName, err)
+	}
+	defer resp.Body.Close()
+
+	limitedReader := io.LimitReader(resp.Body, int64(constants.MaxResponseBodySize))
+
+	// Check status code
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(limitedReader)
+		return nil, fmt.Errorf("%s request failed with status %d: %s", endpointName, resp.StatusCode, string(body))
+	}
+
+	// Decode response
+	var result T
+	if err := json.NewDecoder(limitedReader).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode %s response: %w", endpointName, err)
+	}
+
+	return &result, nil
 }

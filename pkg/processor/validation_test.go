@@ -7,10 +7,21 @@ import (
 
 	"github.com/coinbase/x402/go/pkg/facilitatorclient"
 	x402types "github.com/coinbase/x402/go/pkg/types"
+	"github.com/sigweihq/x402pay/pkg/chains"
+	"github.com/sigweihq/x402pay/pkg/chains/evm"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestExtractTransactionHash(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+	// Initialize EVM chains with test endpoints
+	testEndpoints := map[string][]string{
+		"base": {"https://mainnet.base.org"},
+	}
+	err := evm.InitEVMChainsWithEndpoints(logger, testEndpoints)
+	assert.NoError(t, err)
+
 	tests := []struct {
 		name          string
 		settleResp    *x402types.SettleResponse
@@ -21,6 +32,7 @@ func TestExtractTransactionHash(t *testing.T) {
 			name: "valid transaction hash with 0x prefix",
 			settleResp: &x402types.SettleResponse{
 				Transaction: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+				Network:     "base",
 			},
 			expected:      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
 			expectedError: false,
@@ -29,6 +41,7 @@ func TestExtractTransactionHash(t *testing.T) {
 			name: "valid transaction hash without 0x prefix",
 			settleResp: &x402types.SettleResponse{
 				Transaction: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+				Network:     "base",
 			},
 			expected:      "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
 			expectedError: false,
@@ -37,6 +50,7 @@ func TestExtractTransactionHash(t *testing.T) {
 			name: "empty transaction hash",
 			settleResp: &x402types.SettleResponse{
 				Transaction: "",
+				Network:     "base",
 			},
 			expected:      "",
 			expectedError: true,
@@ -45,6 +59,16 @@ func TestExtractTransactionHash(t *testing.T) {
 			name: "invalid transaction hash format",
 			settleResp: &x402types.SettleResponse{
 				Transaction: "0x123invalid",
+				Network:     "base",
+			},
+			expected:      "",
+			expectedError: true,
+		},
+		{
+			name: "missing network field",
+			settleResp: &x402types.SettleResponse{
+				Transaction: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+				Network:     "",
 			},
 			expected:      "",
 			expectedError: true,
@@ -68,30 +92,39 @@ func TestExtractTransactionHash(t *testing.T) {
 func TestGlobalRPCManagerCreation(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	// Initialize the global manager
-	InitGlobalRPCManager(logger)
+	// Initialize EVM chains with test endpoints (avoids network calls)
+	testEndpoints := map[string][]string{
+		"base":         {"https://mainnet.base.org"},
+		"base-sepolia": {"https://sepolia.base.org"},
+	}
+	err := evm.InitEVMChainsWithEndpoints(logger, testEndpoints)
+	assert.NoError(t, err)
 
-	rpcManager := GetGlobalRPCManager()
-
-	assert.NotNil(t, rpcManager)
-	assert.NotNil(t, rpcManager.endpoints)
-	assert.Equal(t, logger, rpcManager.logger)
+	// Verify that the chain registry was initialized
+	registry := chains.GetGlobalRegistry()
+	assert.NotNil(t, registry)
 }
 
 func TestProcessorWithBlockchainVerification(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	// Create a test processor with empty client list for testing structure
+	// Create a test processor with empty feePayer map for testing structure
 	processor := &PaymentProcessor{
-		facilitatorClients: []*facilitatorclient.FacilitatorClient{},
-		logger:             logger,
+		feePayerToClients: make(map[string][]*facilitatorclient.FacilitatorClient),
+		logger:            logger,
 	}
 
 	assert.NotNil(t, processor)
 	assert.Equal(t, logger, processor.logger)
 
-	// Initialize and verify global RPC manager
-	InitGlobalRPCManager(logger)
-	rpcManager := GetGlobalRPCManager()
-	assert.NotNil(t, rpcManager)
+	// Initialize and verify chain registry with test endpoints (avoids network calls)
+	testEndpoints := map[string][]string{
+		"base":         {"https://mainnet.base.org"},
+		"base-sepolia": {"https://sepolia.base.org"},
+	}
+	err := evm.InitEVMChainsWithEndpoints(logger, testEndpoints)
+	assert.NoError(t, err)
+
+	registry := chains.GetGlobalRegistry()
+	assert.NotNil(t, registry)
 }

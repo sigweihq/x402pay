@@ -383,7 +383,7 @@ func TestHubClient_Settle(t *testing.T) {
 			useDbId:          false,
 			serverStatusCode: http.StatusInternalServerError,
 			expectedError:    true,
-			errorContains:    "failed to settle payment",
+			errorContains:    "settle request failed with status 500",
 		},
 		{
 			name: "invalid JSON response",
@@ -652,14 +652,14 @@ func TestHubClient_Supported(t *testing.T) {
 			serverResponse:   nil,
 			serverStatusCode: http.StatusInternalServerError,
 			expectedError:    true,
-			errorContains:    "failed to get supported networks",
+			errorContains:    "supported request failed with status 500",
 		},
 		{
 			name:             "server returns 404 error",
 			serverResponse:   nil,
 			serverStatusCode: http.StatusNotFound,
 			expectedError:    true,
-			errorContains:    "failed to get supported networks",
+			errorContains:    "supported request failed with status 404",
 		},
 	}
 

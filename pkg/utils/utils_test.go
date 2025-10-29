@@ -49,11 +49,11 @@ func TestAuthorizationToTypedData(t *testing.T) {
 				require.NoError(t, err)
 
 				// Verify domain
-				assert.Equal(t, constants.USDCName[constants.USDCAddressBase], typedData.Domain.Name)
+				assert.Equal(t, constants.USDCName[constants.NetworkBase], typedData.Domain.Name)
 				assert.Equal(t, "2", typedData.Domain.Version)
 				expectedChainId := math.NewHexOrDecimal256(8453)
 				assert.Equal(t, (*big.Int)(expectedChainId), (*big.Int)(typedData.Domain.ChainId))
-				assert.Equal(t, strings.ToLower(constants.USDCAddressBase), typedData.Domain.VerifyingContract)
+				assert.Equal(t, strings.ToLower(constants.NetworkToUSDCAddress[constants.NetworkBase]), typedData.Domain.VerifyingContract)
 
 				// Verify primary type
 				assert.Equal(t, "TransferWithAuthorization", typedData.PrimaryType)
@@ -70,7 +70,7 @@ func TestAuthorizationToTypedData(t *testing.T) {
 			name: "successful conversion for Base Sepolia network",
 			paymentRequirements: &x402types.PaymentRequirements{
 				Network: constants.NetworkBaseSepolia,
-				Asset:   constants.USDCAddressBaseSepolia,
+				Asset:   constants.NetworkToUSDCAddress[constants.NetworkBaseSepolia],
 			},
 			authorization: &x402types.ExactEvmPayloadAuthorization{
 				From:        "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
@@ -87,17 +87,17 @@ func TestAuthorizationToTypedData(t *testing.T) {
 				require.NoError(t, err)
 
 				// Verify domain
-				assert.Equal(t, constants.USDCName[constants.USDCAddressBaseSepolia], typedData.Domain.Name)
+				assert.Equal(t, constants.USDCName[constants.NetworkBaseSepolia], typedData.Domain.Name)
 				expectedChainId := math.NewHexOrDecimal256(84532)
 				assert.Equal(t, (*big.Int)(expectedChainId), (*big.Int)(typedData.Domain.ChainId))
-				assert.Equal(t, strings.ToLower(constants.USDCAddressBaseSepolia), typedData.Domain.VerifyingContract)
+				assert.Equal(t, strings.ToLower(constants.NetworkToUSDCAddress[constants.NetworkBaseSepolia]), typedData.Domain.VerifyingContract)
 			},
 		},
 		{
 			name: "handles mixed case addresses correctly",
 			paymentRequirements: &x402types.PaymentRequirements{
 				Network: constants.NetworkBase,
-				Asset:   "0xABCDEF1234567890ABCDEF1234567890ABCDEF12",
+				Asset:   constants.NetworkToUSDCAddress[constants.NetworkBase],
 			},
 			authorization: &x402types.ExactEvmPayloadAuthorization{
 				From:        "0xAABBCCDDEEFF00112233445566778899AABBCCDD",
@@ -114,7 +114,7 @@ func TestAuthorizationToTypedData(t *testing.T) {
 				require.NoError(t, err)
 
 				// Verify addresses are lowercased
-				assert.Equal(t, "0xabcdef1234567890abcdef1234567890abcdef12", typedData.Domain.VerifyingContract)
+				assert.Equal(t, strings.ToLower(constants.NetworkToUSDCAddress[constants.NetworkBase]), typedData.Domain.VerifyingContract)
 				assert.Equal(t, "0xaabbccddeeff00112233445566778899aabbccdd", typedData.Message["from"])
 				assert.Equal(t, "0x1122334455667788990011223344556677889900", typedData.Message["to"])
 			},
@@ -123,7 +123,7 @@ func TestAuthorizationToTypedData(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			typedDataJSON, err := AuthorizationToTypedData(tt.paymentRequirements, tt.authorization, constants.USDCName[tt.paymentRequirements.Asset])
+			typedDataJSON, err := AuthorizationToTypedData(tt.paymentRequirements, tt.authorization, constants.USDCName[tt.paymentRequirements.Network])
 
 			if tt.expectedError {
 				assert.Error(t, err)
@@ -216,7 +216,7 @@ func TestCreateSignatureForTransfer(t *testing.T) {
 					ValidBefore: "999999999999",
 					Nonce:       "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
 				}
-				differentSig := CreateSignatureForTransfer(privateKey, differentAuth, constants.NetworkBase, constants.USDCAddressBase, constants.USDCName[constants.USDCAddressBase])
+				differentSig := CreateSignatureForTransfer(privateKey, differentAuth, constants.NetworkBase, constants.USDCAddressBase, constants.USDCName[constants.NetworkBase])
 
 				assert.NotEqual(t, signature, differentSig, "different values should produce different signatures")
 			},
@@ -226,7 +226,7 @@ func TestCreateSignatureForTransfer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			asset := constants.NetworkToUSDCAddress[tt.network]
-			signature := CreateSignatureForTransfer(tt.privateKey, tt.authorization, tt.network, asset, constants.USDCName[asset])
+			signature := CreateSignatureForTransfer(tt.privateKey, tt.authorization, tt.network, asset, constants.USDCName[tt.network])
 
 			if tt.validate != nil {
 				tt.validate(t, signature)
@@ -434,7 +434,7 @@ func TestCreatePaymentPayload(t *testing.T) {
 				tt.toAddress,
 				tt.network,
 				asset,
-				constants.USDCName[asset],
+				constants.USDCName[tt.network],
 				tt.value,
 				tt.nonce,
 			)
@@ -471,9 +471,9 @@ func TestSignatureConsistency(t *testing.T) {
 	}
 
 	// Create signature multiple times
-	sig1 := CreateSignatureForTransfer(privateKey, authorization, constants.NetworkBase, constants.USDCAddressBase, constants.USDCName[constants.USDCAddressBase])
-	sig2 := CreateSignatureForTransfer(privateKey, authorization, constants.NetworkBase, constants.USDCAddressBase, constants.USDCName[constants.USDCAddressBase])
-	sig3 := CreateSignatureForTransfer(privateKey, authorization, constants.NetworkBase, constants.USDCAddressBase, constants.USDCName[constants.USDCAddressBase])
+	sig1 := CreateSignatureForTransfer(privateKey, authorization, constants.NetworkBase, constants.USDCAddressBase, constants.USDCName[constants.NetworkBase])
+	sig2 := CreateSignatureForTransfer(privateKey, authorization, constants.NetworkBase, constants.USDCAddressBase, constants.USDCName[constants.NetworkBase])
+	sig3 := CreateSignatureForTransfer(privateKey, authorization, constants.NetworkBase, constants.USDCAddressBase, constants.USDCName[constants.NetworkBase])
 
 	// All signatures should be identical
 	assert.Equal(t, sig1, sig2)
@@ -487,7 +487,7 @@ func TestCreatePaymentPayloadEndToEnd(t *testing.T) {
 		"0x0987654321098765432109876543210987654321",
 		constants.NetworkBase,
 		constants.USDCAddressBase,
-		constants.USDCName[constants.USDCAddressBase],
+		constants.USDCName[constants.NetworkBase],
 		1000000,
 		"0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
 	)
@@ -523,7 +523,7 @@ func TestCreatePaymentPayloadEndToEnd(t *testing.T) {
 		payload.Payload.Authorization,
 		constants.NetworkBase,
 		constants.USDCAddressBase,
-		constants.USDCName[constants.USDCAddressBase],
+		constants.USDCName[constants.NetworkBase],
 	)
 	assert.Equal(t, expectedSignature, payload.Payload.Signature)
 }

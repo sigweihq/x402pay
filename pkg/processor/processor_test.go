@@ -159,11 +159,11 @@ func TestInitProcessorMap(t *testing.T) {
 	// Verify processors were created for each network
 	baseProcessor := getProcessor(constants.NetworkBase)
 	assert.NotNil(t, baseProcessor)
-	assert.Len(t, baseProcessor.facilitatorClients, 2) // Both servers support base
+	assert.Len(t, baseProcessor.feePayerToClients[""], 2) // Both servers support base (no specific feePayer)
 
 	sepoliaProcessor := getProcessor(constants.NetworkBaseSepolia)
 	assert.NotNil(t, sepoliaProcessor)
-	assert.Len(t, sepoliaProcessor.facilitatorClients, 1) // Only server1 supports sepolia
+	assert.Len(t, sepoliaProcessor.feePayerToClients[""], 1) // Only server1 supports sepolia (no specific feePayer)
 
 	// Verify error for unknown network
 	unknownProcessor := getProcessor("unknown-network")
@@ -196,15 +196,15 @@ func TestProcessorFacilitatorConfigs(t *testing.T) {
 		// Sepolia should have both facilitators
 		sepoliaProcessor := getProcessor(constants.NetworkBaseSepolia)
 		assert.NotNil(t, sepoliaProcessor)
-		assert.Len(t, sepoliaProcessor.facilitatorClients, 2) // Both servers support sepolia
-		assert.Equal(t, server1.URL, sepoliaProcessor.facilitatorClients[0].URL)
-		assert.Equal(t, server2.URL, sepoliaProcessor.facilitatorClients[1].URL)
+		assert.Len(t, sepoliaProcessor.feePayerToClients[""], 2) // Both servers support sepolia (no specific feePayer)
+		assert.Equal(t, server1.URL, sepoliaProcessor.feePayerToClients[""][0].URL)
+		assert.Equal(t, server2.URL, sepoliaProcessor.feePayerToClients[""][1].URL)
 
 		// Base should only have server1
 		baseProcessor := getProcessor(constants.NetworkBase)
 		assert.NotNil(t, baseProcessor)
-		assert.Len(t, baseProcessor.facilitatorClients, 1) // Only server1 supports base
-		assert.Equal(t, server1.URL, baseProcessor.facilitatorClients[0].URL)
+		assert.Len(t, baseProcessor.feePayerToClients[""], 1) // Only server1 supports base (no specific feePayer)
+		assert.Equal(t, server1.URL, baseProcessor.feePayerToClients[""][0].URL)
 	})
 
 	t.Run("single facilitator supporting multiple networks", func(t *testing.T) {
@@ -225,13 +225,13 @@ func TestProcessorFacilitatorConfigs(t *testing.T) {
 		// Both networks should have the same facilitator
 		sepoliaProcessor := getProcessor(constants.NetworkBaseSepolia)
 		assert.NotNil(t, sepoliaProcessor)
-		assert.Len(t, sepoliaProcessor.facilitatorClients, 1)
-		assert.Equal(t, server.URL, sepoliaProcessor.facilitatorClients[0].URL)
+		assert.Len(t, sepoliaProcessor.feePayerToClients[""], 1)
+		assert.Equal(t, server.URL, sepoliaProcessor.feePayerToClients[""][0].URL)
 
 		baseProcessor := getProcessor(constants.NetworkBase)
 		assert.NotNil(t, baseProcessor)
-		assert.Len(t, baseProcessor.facilitatorClients, 1)
-		assert.Equal(t, server.URL, baseProcessor.facilitatorClients[0].URL)
+		assert.Len(t, baseProcessor.feePayerToClients[""], 1)
+		assert.Equal(t, server.URL, baseProcessor.feePayerToClients[""][0].URL)
 	})
 
 	t.Run("no facilitators configured", func(t *testing.T) {
@@ -514,7 +514,7 @@ func TestProcessTransfer(t *testing.T) {
 		// Create test payment payload
 		paymentPayload := createTestPaymentPayload(
 			constants.NetworkBaseSepolia,
-			constants.USDCAddressBaseSepolia,
+			constants.NetworkToUSDCAddress[constants.NetworkBaseSepolia],
 			"5000000", // 5 USDC (6 decimals)
 		)
 
@@ -522,7 +522,7 @@ func TestProcessTransfer(t *testing.T) {
 		settleResp, err := ProcessTransfer(
 			paymentPayload,
 			"https://example.com/api/resource",
-			constants.USDCAddressBaseSepolia,
+			constants.NetworkToUSDCAddress[constants.NetworkBaseSepolia],
 		)
 
 		// Verify results
@@ -576,7 +576,7 @@ func TestProcessTransfer(t *testing.T) {
 		// Test with lowercase USDC address
 		paymentPayload := createTestPaymentPayload(
 			constants.NetworkBase,
-			constants.USDCAddressBase,
+			constants.NetworkToUSDCAddress[constants.NetworkBase],
 			"1000000",
 		)
 
@@ -808,14 +808,14 @@ func TestProcessTransfertWithCallback(t *testing.T) {
 		var capturedRequirements *x402types.PaymentRequirements
 		var capturedSettleResponse *x402types.SettleResponse
 
-		onVerified := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements) error {
+		onVerified := func(payload any, requirements *x402types.PaymentRequirements) error {
 			verifiedCallbackCalled = true
-			capturedPayload = payload
+			capturedPayload = payload.(*x402types.PaymentPayload)
 			capturedRequirements = requirements
 			return nil
 		}
 
-		onSettled := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements, settleResp *x402types.SettleResponse) error {
+		onSettled := func(payload any, requirements *x402types.PaymentRequirements, settleResp *x402types.SettleResponse) error {
 			settledCallbackCalled = true
 			capturedSettleResponse = settleResp
 			return nil
@@ -907,11 +907,11 @@ func TestProcessTransfertWithCallback(t *testing.T) {
 	})
 
 	t.Run("error when onVerified callback fails", func(t *testing.T) {
-		onVerified := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements) error {
+		onVerified := func(payload any, requirements *x402types.PaymentRequirements) error {
 			return assert.AnError
 		}
 
-		onSettled := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements, settleResp *x402types.SettleResponse) error {
+		onSettled := func(payload any, requirements *x402types.PaymentRequirements, settleResp *x402types.SettleResponse) error {
 			return nil
 		}
 
@@ -971,11 +971,11 @@ func TestProcessTransfertWithCallback(t *testing.T) {
 	})
 
 	t.Run("error when onSettled callback fails", func(t *testing.T) {
-		onVerified := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements) error {
+		onVerified := func(payload any, requirements *x402types.PaymentRequirements) error {
 			return nil
 		}
 
-		onSettled := func(payload *x402types.PaymentPayload, requirements *x402types.PaymentRequirements, settleResp *x402types.SettleResponse) error {
+		onSettled := func(payload any, requirements *x402types.PaymentRequirements, settleResp *x402types.SettleResponse) error {
 			return assert.AnError
 		}
 

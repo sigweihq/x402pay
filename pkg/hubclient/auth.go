@@ -92,8 +92,11 @@ func (c *AuthClient) RefreshToken() (*x402paytypes.TokenPair, error) {
 		return nil, fmt.Errorf("failed to refresh token: %w", err)
 	}
 
-	// Update stored tokens
-	c.SetTokens(result.AccessToken, result.RefreshToken)
+	// Update stored tokens atomically to prevent race conditions
+	c.tokenMutex.Lock()
+	c.accessToken = result.AccessToken
+	c.refreshToken = result.RefreshToken
+	c.tokenMutex.Unlock()
 
 	return &result, nil
 }

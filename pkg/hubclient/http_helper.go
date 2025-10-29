@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/sigweihq/x402pay/pkg/constants"
 )
 
 // httpRequest is a shared helper for making HTTP requests with consistent error handling
@@ -39,10 +41,12 @@ func httpRequest(client *http.Client, method, url string, body interface{}, head
 	}
 	defer resp.Body.Close()
 
+	limitedReader := io.LimitReader(resp.Body, int64(constants.MaxResponseBodySize))
+
 	// Handle non-2xx status codes
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Try to read error response body
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, _ := io.ReadAll(limitedReader)
 		return &HTTPError{
 			StatusCode: resp.StatusCode,
 			Status:     resp.Status,
@@ -52,7 +56,7 @@ func httpRequest(client *http.Client, method, url string, body interface{}, head
 
 	// Decode response if result is provided
 	if result != nil {
-		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+		if err := json.NewDecoder(limitedReader).Decode(result); err != nil {
 			return fmt.Errorf("failed to decode response: %w", err)
 		}
 	}

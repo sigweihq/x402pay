@@ -4,8 +4,6 @@ package hubclient
 // https://github.com/coinbase/x402/blob/main/go/pkg/facilitatorclient/facilitatorclient.go
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -70,46 +68,14 @@ func (c *HubClient) SettleWithOptions(payload *types.PaymentPayload, requirement
 		"useDbId":             useDbId,
 	}
 
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request body: %w", err)
-	}
-
-	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/settle", c.URL), bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	// Add auth headers if available
-	if c.CreateAuthHeaders != nil {
-		headers, err := c.CreateAuthHeaders()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create auth headers: %w", err)
-		}
-		if settleHeaders, ok := headers["settle"]; ok {
-			for key, value := range settleHeaders {
-				req.Header.Set(key, value)
-			}
-		}
-	}
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send settle request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to settle payment: %s", resp.Status)
-	}
-
-	var settleResp types.SettleResponse
-	if err := json.NewDecoder(resp.Body).Decode(&settleResp); err != nil {
-		return nil, fmt.Errorf("failed to decode settle response: %w", err)
-	}
-
-	return &settleResp, nil
+	return utils.MakeJSONRequest[types.SettleResponse](
+		c.HTTPClient,
+		http.MethodPost,
+		fmt.Sprintf("%s/settle", c.URL),
+		reqBody,
+		c.CreateAuthHeaders,
+		"settle",
+	)
 }
 
 // Transfer is an enpoint for convenient transfers
@@ -121,81 +87,98 @@ func (c *HubClient) Transfer(payload *types.ExactEvmPayload, network string, ass
 		"confirm": confirm,
 	}
 
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request body: %w", err)
-	}
-
-	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/transfer", c.URL), bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	// Add auth headers if available
-	if c.CreateAuthHeaders != nil {
-		headers, err := c.CreateAuthHeaders()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create auth headers: %w", err)
-		}
-		if settleHeaders, ok := headers["transfer"]; ok {
-			for key, value := range settleHeaders {
-				req.Header.Set(key, value)
-			}
-		}
-	}
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send transfer request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to transfer payment: %s", resp.Status)
-	}
-
-	var settleResp types.SettleResponse
-	if err := json.NewDecoder(resp.Body).Decode(&settleResp); err != nil {
-		return nil, fmt.Errorf("failed to decode transfer response: %w", err)
-	}
-
-	return &settleResp, nil
+	return utils.MakeJSONRequest[types.SettleResponse](
+		c.HTTPClient,
+		http.MethodPost,
+		fmt.Sprintf("%s/transfer", c.URL),
+		reqBody,
+		c.CreateAuthHeaders,
+		"transfer",
+	)
 }
 
 func (c *HubClient) Supported() (*x402paytypes.SupportedResponse, error) {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/supported", c.URL), nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+	return utils.MakeJSONRequest[x402paytypes.SupportedResponse](
+		c.HTTPClient,
+		http.MethodGet,
+		fmt.Sprintf("%s/supported", c.URL),
+		nil, // No request body for GET request
+		c.CreateAuthHeaders,
+		"supported",
+	)
+}
 
-	// Add supported headers if available
-	if c.CreateAuthHeaders != nil {
-		headers, err := c.CreateAuthHeaders()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create auth headers: %w", err)
-		}
-		if supportedHeaders, ok := headers["supported"]; ok {
-			for key, value := range supportedHeaders {
-				req.Header.Set(key, value)
-			}
-		}
-	}
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send supported request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to get supported networks: %s", resp.Status)
+// VerifySolana verifies a Solana payment with the hub
+func (c *HubClient) VerifySolana(payload *x402paytypes.SolanaPaymentPayload, requirements *types.PaymentRequirements) (*types.VerifyResponse, error) {
+	reqBody := map[string]any{
+		"x402Version":         1,
+		"paymentPayload":      payload,
+		"paymentRequirements": requirements,
 	}
 
-	var supportedResp x402paytypes.SupportedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&supportedResp); err != nil {
-		return nil, fmt.Errorf("failed to decode supported response: %w", err)
+	return utils.MakeJSONRequest[types.VerifyResponse](
+		c.HTTPClient,
+		http.MethodPost,
+		fmt.Sprintf("%s/verify", c.URL),
+		reqBody,
+		c.CreateAuthHeaders,
+		"verify",
+	)
+}
+
+// SettleSolana settles a Solana payment with the hub
+func (c *HubClient) SettleSolana(payload *x402paytypes.SolanaPaymentPayload, requirements *types.PaymentRequirements) (*types.SettleResponse, error) {
+	reqBody := map[string]any{
+		"x402Version":         1,
+		"paymentPayload":      payload,
+		"paymentRequirements": requirements,
 	}
-	return &supportedResp, nil
+
+	return utils.MakeJSONRequest[types.SettleResponse](
+		c.HTTPClient,
+		http.MethodPost,
+		fmt.Sprintf("%s/settle", c.URL),
+		reqBody,
+		c.CreateAuthHeaders,
+		"settle",
+	)
+}
+
+// SettleWithOptionsSolana settles a Solana payment with additional options
+func (c *HubClient) SettleWithOptionsSolana(payload *x402paytypes.SolanaPaymentPayload, requirements *types.PaymentRequirements, confirm bool, useDbId bool) (*types.SettleResponse, error) {
+	reqBody := map[string]any{
+		"x402Version":         1,
+		"paymentPayload":      payload,
+		"paymentRequirements": requirements,
+		"confirm":             confirm,
+		"useDbId":             useDbId,
+	}
+
+	return utils.MakeJSONRequest[types.SettleResponse](
+		c.HTTPClient,
+		http.MethodPost,
+		fmt.Sprintf("%s/settle", c.URL),
+		reqBody,
+		c.CreateAuthHeaders,
+		"settle",
+	)
+}
+
+// TransferSolana is an endpoint for convenient Solana transfers
+func (c *HubClient) TransferSolana(payload *x402paytypes.ExactSolanaPayload, network string, asset string, confirm bool) (*types.SettleResponse, error) {
+	reqBody := map[string]any{
+		"payload": payload,
+		"network": network,
+		"asset":   asset,
+		"confirm": confirm,
+	}
+
+	return utils.MakeJSONRequest[types.SettleResponse](
+		c.HTTPClient,
+		http.MethodPost,
+		fmt.Sprintf("%s/transfer", c.URL),
+		reqBody,
+		c.CreateAuthHeaders,
+		"transfer",
+	)
 }
