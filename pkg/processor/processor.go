@@ -592,16 +592,39 @@ func DiscoverSupported(c *facilitatorclient.FacilitatorClient) []types.NetworkKi
 	return supportedNetworks.Kinds
 }
 
-// GetSupportedNetworks returns all networks discovered by facilitators
-// For more granular filtering, use chains.GetDiscoveredEVMNetworks() or chains.GetDiscoveredSVMNetworks()
-func GetSupportedNetworks() []string {
-	// return keys of processorMap
-	keys := make([]string, 0)
-	processorMap.Range(func(key, _ any) bool {
-		keys = append(keys, key.(string))
+// GetSupportedNetworks returns all supported network kinds with extra information
+// including fee payers for Solana networks
+func GetSupportedNetworks() []types.NetworkKind {
+	kinds := make([]types.NetworkKind, 0)
+
+	processorMap.Range(func(key, value any) bool {
+		network := key.(string)
+		processor := value.(*PaymentProcessor)
+
+		if len(processor.feePayerToClients) == 0 {
+			// No processor clients, skip
+			return true
+		}
+
+		// Create NetworkKind for each fee payer combination
+		// For EVM: one entry with feePayer=""
+		// For SVM: one entry per feePayer address
+		for feePayer := range processor.feePayerToClients {
+			kind := types.NetworkKind{
+				X402Version: 1,
+				Scheme:      "exact",
+				Network:     network,
+			}
+			if feePayer != "" {
+				kind.Extra = &types.NetworkKindExtra{FeePayer: feePayer}
+			}
+			kinds = append(kinds, kind)
+		}
+
 		return true
 	})
-	return keys
+
+	return kinds
 }
 
 func ProcessTransfer(paymentPayload *x402types.PaymentPayload, resourceURL, asset string) (*x402types.SettleResponse, error) {

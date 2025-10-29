@@ -267,8 +267,8 @@ func TestGetSupportedNetworks(t *testing.T) {
 		}
 		InitProcessorMap(config, logger)
 
-		networks := GetSupportedNetworks()
-		assert.Empty(t, networks)
+		kinds := GetSupportedNetworks()
+		assert.Empty(t, kinds)
 	})
 
 	t.Run("single network configured", func(t *testing.T) {
@@ -285,9 +285,10 @@ func TestGetSupportedNetworks(t *testing.T) {
 		}
 		InitProcessorMap(config, logger)
 
-		networks := GetSupportedNetworks()
-		assert.Len(t, networks, 1)
-		assert.Contains(t, networks, constants.NetworkBase)
+		kinds := GetSupportedNetworks()
+		assert.Len(t, kinds, 1)
+		assert.Equal(t, constants.NetworkBase, kinds[0].Network)
+		assert.Equal(t, "exact", kinds[0].Scheme)
 	})
 
 	t.Run("multiple networks configured", func(t *testing.T) {
@@ -307,10 +308,16 @@ func TestGetSupportedNetworks(t *testing.T) {
 		}
 		InitProcessorMap(config, logger)
 
-		networks := GetSupportedNetworks()
-		assert.Len(t, networks, 2)
-		assert.Contains(t, networks, constants.NetworkBase)
-		assert.Contains(t, networks, constants.NetworkBaseSepolia)
+		kinds := GetSupportedNetworks()
+		assert.Len(t, kinds, 2)
+
+		networks := make(map[string]bool)
+		for _, kind := range kinds {
+			networks[kind.Network] = true
+			assert.Equal(t, "exact", kind.Scheme)
+		}
+		assert.True(t, networks[constants.NetworkBase])
+		assert.True(t, networks[constants.NetworkBaseSepolia])
 	})
 
 	t.Run("multiple facilitators with different network support", func(t *testing.T) {
@@ -330,10 +337,15 @@ func TestGetSupportedNetworks(t *testing.T) {
 		}
 		InitProcessorMap(config, logger)
 
-		networks := GetSupportedNetworks()
-		assert.Len(t, networks, 2)
-		assert.Contains(t, networks, constants.NetworkBase)
-		assert.Contains(t, networks, constants.NetworkBaseSepolia)
+		kinds := GetSupportedNetworks()
+		assert.Len(t, kinds, 2)
+
+		networks := make(map[string]bool)
+		for _, kind := range kinds {
+			networks[kind.Network] = true
+		}
+		assert.True(t, networks[constants.NetworkBase])
+		assert.True(t, networks[constants.NetworkBaseSepolia])
 	})
 
 	t.Run("overlapping network support from multiple facilitators", func(t *testing.T) {
@@ -353,11 +365,16 @@ func TestGetSupportedNetworks(t *testing.T) {
 		}
 		InitProcessorMap(config, logger)
 
-		networks := GetSupportedNetworks()
+		kinds := GetSupportedNetworks()
 		// Should still return unique networks (no duplicates)
-		assert.Len(t, networks, 2)
-		assert.Contains(t, networks, constants.NetworkBase)
-		assert.Contains(t, networks, constants.NetworkBaseSepolia)
+		assert.Len(t, kinds, 2)
+
+		networks := make(map[string]bool)
+		for _, kind := range kinds {
+			networks[kind.Network] = true
+		}
+		assert.True(t, networks[constants.NetworkBase])
+		assert.True(t, networks[constants.NetworkBaseSepolia])
 	})
 }
 
